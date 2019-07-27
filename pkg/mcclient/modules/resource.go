@@ -325,6 +325,7 @@ func (this *ResourceManager) CreateInContext(session *mcclient.ClientSession, pa
 
 func (this *ResourceManager) CreateInContexts(session *mcclient.ClientSession, params jsonutils.JSONObject, ctxs []ManagerContext) (jsonutils.JSONObject, error) {
 	path := fmt.Sprintf("/%s", this.ContextPath(ctxs))
+	log.Infof("CreateInContexts session:%v,path:%s,params:%s,keyword:%s", *session, path, this.params2Body(session, params), this.Keyword)
 	result, err := this._post(session, path, this.params2Body(session, params), this.Keyword)
 	if err != nil {
 		return nil, err

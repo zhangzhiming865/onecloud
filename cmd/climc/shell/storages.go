@@ -94,12 +94,14 @@ func init() {
 		ZONE         string `help:"Zone id of storage"`
 		Capacity     int64  `help:"Capacity of the Storage"`
 		MediumType   string `help:"Medium type, either ssd or rotate" choices:"ssd|rotate"`
-		StorageType  string `help:"Storage type" choices:"local|nas|vsan|rbd|nfs|gpfs|baremetal"`
+		StorageType  string `help:"Storage type" choices:"local|nas|vsan|rbd|nfs|mebs|gpfs|baremetal"`
 		MonHost      string `help:"Ceph mon_host config"`
 		Key          string `help:"Ceph key config"`
 		Pool         string `help:"Ceph Pool Name"`
 		NfsHost      string `help:"NFS host"`
 		NfsSharedDir string `help:"NFS shared dir"`
+		MebsHost     string `help:"mebs host"`
+		MebsPort     string `help:"mebs port"`
 	}
 	R(&StorageCreateOptions{}, "storage-create", "Create a Storage", func(s *mcclient.ClientSession, args *StorageCreateOptions) error {
 		params := jsonutils.NewDict()
@@ -121,6 +123,16 @@ func init() {
 			}
 			params.Add(jsonutils.NewString(args.NfsHost), "nfs_host")
 			params.Add(jsonutils.NewString(args.NfsSharedDir), "nfs_shared_dir")
+		} else if args.StorageType == "mebs" {
+			if args.MebsHost == "" {
+				return fmt.Errorf("Not enough arguments, missing mebs_host")
+			}
+			if args.MebsPort == "" {
+				return fmt.Errorf("Not enough arguments, missing mebs_port")
+			}
+			params.Add(jsonutils.NewString(args.MebsHost), "mebs_host")
+			params.Add(jsonutils.NewString(args.MebsPort), "mebs_port")
+
 		}
 		storage, err := modules.Storages.Create(s, params)
 		if err != nil {

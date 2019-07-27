@@ -47,6 +47,7 @@ const (
 	STORAGE_NAS       = api.STORAGE_NAS
 	STORAGE_VSAN      = api.STORAGE_VSAN
 	STORAGE_NFS       = api.STORAGE_NFS
+	STORAGE_MEBS       = api.STORAGE_MEBS
 
 	STORAGE_PUBLIC_CLOUD     = api.STORAGE_PUBLIC_CLOUD
 	STORAGE_CLOUD_EFFICIENCY = api.STORAGE_CLOUD_EFFICIENCY
@@ -203,7 +204,7 @@ func (manager *SStorageManager) ValidateCreateData(ctx context.Context, userCred
 	mediumType, _ := data.GetString("medium_type")
 
 	if !utils.IsInStringArray(storageType, api.STORAGE_TYPES) {
-		return nil, httperrors.NewInputParameterError("Invalid storage type %s", storageType)
+		return nil, httperrors.NewInputParameterError("Invalid storage type %s||%v", storageType, api.STORAGE_TYPES)
 	}
 	if !utils.IsInStringArray(mediumType, api.DISK_TYPES) {
 		return nil, httperrors.NewInputParameterError("Invalid medium type %s", mediumType)
