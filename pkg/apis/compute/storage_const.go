@@ -19,6 +19,7 @@ const (
 	STORAGE_BAREMETAL = "baremetal"
 	STORAGE_SHEEPDOG  = "sheepdog"
 	STORAGE_RBD       = "rbd"
+	STORAGE_MEBS      = "mebs"
 	STORAGE_DOCKER    = "docker"
 	STORAGE_NAS       = "nas"
 	STORAGE_VSAN      = "vsan"
