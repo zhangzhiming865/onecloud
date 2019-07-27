@@ -65,6 +65,7 @@ func registerStorageFactory(factory IStorageFactory) {
 func NewStorage(manager *SStorageManager, mountPoint, storageType string) IStorage {
 	for i := range storagesFactories {
 		if storageType == storagesFactories[i].StorageType() || strings.HasPrefix(mountPoint, storagesFactories[i].StorageType()) {
+			log.Infof("new storage mount point storage type %v mount point %v", storageType, mountPoint)
 			return storagesFactories[i].NewStorage(manager, mountPoint)
 		}
 	}
@@ -238,6 +239,7 @@ func (s *SBaseStorage) CreateDiskByDiskinfo(ctx context.Context, params interfac
 		return nil, hostutils.ParamsError
 	}
 
+	log.Infof("mebs debug CreateDiskByDiskinfo %v, disk %v", createParams.DiskInfo, createParams.Disk)
 	if createParams.Disk != nil {
 		if !jsonutils.QueryBoolean(createParams.DiskInfo, "rebuild", false) {
 			return nil, fmt.Errorf("Disk exist")

@@ -1,16 +1,9 @@
-// Copyright 2019 Yunion
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+* @author
+*    fuyuandi fuyuandi2008@163.com
+*    zhangzhiming zhangzhiming865@163.com
+* ©2019 fuyuandi and zhangzhiming. All Rights Reserved.
+**/
 
 package storagedrivers
 
@@ -45,13 +38,6 @@ func (self *SMebsStorageDriver) GetStorageType() string {
 func (self *SMebsStorageDriver) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
 	log.Infof("SMebsStorageDriver:param data:%v", data)
 	conf := jsonutils.NewDict()
-	/*for _, v := range []string{"mebs_host","mebs_port"} {
-		if !data.Contains(v) {
-			return nil, httperrors.NewMissingParameterError(v)
-		}
-		value, _ := data.GetString(v)
-		conf.Add(jsonutils.NewString(value), strings.TrimPrefix(v, "mebs_"))
-	}*/
 	if !data.Contains("mebs_host") {
 		return nil, httperrors.NewMissingParameterError("mebs_host")
 	}
@@ -63,12 +49,7 @@ func (self *SMebsStorageDriver) ValidateCreateData(ctx context.Context, userCred
 	new_host := mebs_host
 	new_host += ":"
 	new_host += mebs_port
-	conf.Add(jsonutils.NewString("mon_host"), new_host)
-	/*if timeout, _ := data.Int("rbd_timeout"); timeout > 0 {
-		conf.Add(jsonutils.NewInt(timeout), "rados_osd_op_timeout")
-		conf.Add(jsonutils.NewInt(timeout), "rados_mon_op_timeout")
-		conf.Add(jsonutils.NewInt(timeout), "client_mount_timeout")
-	}*/
+	conf.Add(jsonutils.NewString(new_host), "mon_host")
 
 	storages := []models.SStorage{}
 	q := models.StorageManager.Query().Equals("storage_type", api.STORAGE_MEBS)
@@ -114,23 +95,4 @@ func (self *SMebsStorageDriver) PostCreate(ctx context.Context, userCred mcclien
 			}
 		}
 	}
-	/*
-		if len(storage.StoragecacheId) == 0 {
-			sc := &models.SStoragecache{}
-			sc.SetModelManager(models.StoragecacheManager, sc)
-			sc.Name = fmt.Sprintf("imagecache-%s", storage.Id)
-			pool, _ := data.GetString("rbd_pool")
-			sc.Path = fmt.Sprintf("rbd:%s", pool)
-			if err := models.StoragecacheManager.TableSpec().Insert(sc); err != nil {
-				log.Errorf("insert storagecache for storage %s error: %v", storage.Name, err)
-				return
-			}
-			_, err := db.Update(storage, func() error {
-				storage.StoragecacheId = sc.Id
-				return nil
-			})
-			if err != nil {
-				log.Errorf("update storagecache info for storage %s error: %v", storage.Name, err)
-			}
-		}*/
 }

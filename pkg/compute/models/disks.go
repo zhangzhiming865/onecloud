@@ -979,6 +979,7 @@ func (self *SDisk) IsLocal() bool {
 }
 
 func (self *SDisk) GetStorage() *SStorage {
+	log.Infof("mebs test disk %v storage id is %v", self.Id, self.StorageId)
 	store, _ := StorageManager.FetchById(self.StorageId)
 	if store != nil {
 		return store.(*SStorage)

@@ -92,8 +92,8 @@ func init() {
 		RbdPool               string `help:"Ceph Pool Name"`
 		NfsHost               string `help:"NFS host"`
 		NfsSharedDir          string `help:"NFS shared dir"`
-		MebsHost     string `help:"mebs host"`
-		MebsPort     string `help:"mebs port"`
+		MebsHost              string `help:"mebs host"`
+		MebsPort              string `help:"mebs port"`
 	}
 	R(&StorageCreateOptions{}, "storage-create", "Create a Storage", func(s *mcclient.ClientSession, args *StorageCreateOptions) error {
 		params, err := options.StructToParams(args)

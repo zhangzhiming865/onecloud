@@ -45,6 +45,7 @@ type SStorageManager struct {
 	LocalStorageImagecacheManager IImageCacheManger
 	// AgentStorageImagecacheManager IImageCacheManger
 
+	MebsStorageImagecacheManagers       map[string]IImageCacheManger
 	RbdStorageImagecacheManagers        map[string]IImageCacheManger
 	SharedFileStorageImagecacheManagers map[string]IImageCacheManger
 }
@@ -227,6 +228,9 @@ func (s *SStorageManager) GetStoragecacheById(scId string) IImageCacheManger {
 	if sc, ok := s.RbdStorageImagecacheManagers[scId]; ok {
 		return sc
 	}
+	if sc, ok := s.MebsStorageImagecacheManagers[scId]; ok {
+		return sc
+	}
 	return nil
 }
 
@@ -240,6 +244,10 @@ func (s *SStorageManager) InitSharedStorageImageCache(storageType, storagecacheI
 	} else if storageType == api.STORAGE_RBD {
 		if rbdStorage := s.GetStoragecacheById(storagecacheId); rbdStorage == nil {
 			s.AddRbdStorageImagecache(imagecachePath, storage, storagecacheId)
+		}
+	} else if storageType == api.STORAGE_MEBS {
+		if mebsStorage := s.GetStoragecacheById(storagecacheId); mebsStorage == nil {
+			s.AddMebsStorageImagecache(imagecachePath, storage, storagecacheId)
 		}
 	}
 }
@@ -263,6 +271,19 @@ func (s *SStorageManager) AddRbdStorageImagecache(imagecachePath string, storage
 	if _, ok := s.RbdStorageImagecacheManagers[storagecacheId]; !ok {
 		if imagecache := NewImageCacheManager(s, imagecachePath, storage, storagecacheId, api.STORAGE_RBD); imagecache != nil {
 			s.RbdStorageImagecacheManagers[storagecacheId] = imagecache
+			return
+		}
+		log.Errorf("failed init storagecache %s for storage %s", storagecacheId, storage.GetStorageName())
+	}
+}
+
+func (s *SStorageManager) AddMebsStorageImagecache(imagecachePath string, storage IStorage, storagecacheId string) {
+	if s.MebsStorageImagecacheManagers == nil {
+		s.MebsStorageImagecacheManagers = map[string]IImageCacheManger{}
+	}
+	if _, ok := s.MebsStorageImagecacheManagers[storagecacheId]; !ok {
+		if imagecache := NewImageCacheManager(s, imagecachePath, storage, storagecacheId, api.STORAGE_MEBS); imagecache != nil {
+			s.MebsStorageImagecacheManagers[storagecacheId] = imagecache
 			return
 		}
 		log.Errorf("failed init storagecache %s for storage %s", storagecacheId, storage.GetStorageName())

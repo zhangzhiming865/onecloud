@@ -970,7 +970,7 @@ func (self *SStorage) AllowPerformCacheImage(ctx context.Context, userCred mccli
 func (self *SStorage) GetStoragecache() *SStoragecache {
 	obj, err := StoragecacheManager.FetchById(self.StoragecacheId)
 	if err != nil {
-		log.Errorf("cannot find storage cache??? %s", err)
+		log.Errorf("cannot find storage cache??? %s, StoragecacheId %v storage %v", err, self.StoragecacheId, self.GetName())
 		return nil
 	}
 	return obj.(*SStoragecache)
@@ -1066,6 +1066,24 @@ func (manager *SStorageManager) InitializeData() error {
 				log.Fatalf("Get storage %s pool info error", s.Name)
 			} else {
 				storagecache.Path = "rbd:" + pool
+				if err := StoragecacheManager.TableSpec().Insert(storagecache); err != nil {
+					log.Fatalf("Cannot Add storagecache for %s", s.Name)
+				} else {
+					db.Update(&s, func() error {
+						s.StoragecacheId = storagecache.Id
+						return nil
+					})
+				}
+			}
+		}
+		if len(s.StoragecacheId) == 0 && s.StorageType == api.STORAGE_MEBS {
+			storagecache := &SStoragecache{}
+			storagecache.SetModelManager(StoragecacheManager, storagecache)
+			storagecache.Name = "mebs-" + s.Id
+			if mebshost, err := s.StorageConf.GetString("mon_host"); err != nil {
+				log.Warningf("Get mebs %s pool mon-host error", s.Name, s.StorageConf.String())
+			} else {
+				storagecache.Path = "mebs:" + mebshost
 				if err := StoragecacheManager.TableSpec().Insert(storagecache); err != nil {
 					log.Fatalf("Cannot Add storagecache for %s", s.Name)
 				} else {

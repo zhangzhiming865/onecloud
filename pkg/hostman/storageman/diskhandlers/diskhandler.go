@@ -20,6 +20,7 @@ import (
 	"net/http"
 
 	"yunion.io/x/jsonutils"
+	"yunion.io/x/log"
 	"yunion.io/x/pkg/util/regutils"
 
 	"yunion.io/x/onecloud/pkg/appsrv"
@@ -86,6 +87,7 @@ func performImageCache(
 		httperrors.MissingParameterError(w, "disk")
 		return
 	}
+	log.Infof("body %v | disk %v | scId %v", body, disk, scId)
 	storagecache := storageman.GetManager().GetStoragecacheById(scId)
 	if storagecache == nil {
 		httperrors.NotFoundError(w, "Storagecache %s not found", scId)
