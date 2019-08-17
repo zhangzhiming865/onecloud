@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/sqlchemy"
@@ -90,6 +91,8 @@ type IModelManager interface {
 	InitializeData() error
 
 	CustomizeHandlerInfo(info *appsrv.SHandlerInfo)
+	SetHandlerProcessTimeout(info *appsrv.SHandlerInfo, r *http.Request) time.Duration
+
 	FetchCreateHeaderData(ctx context.Context, header http.Header) (jsonutils.JSONObject, error)
 	FetchUpdateHeaderData(ctx context.Context, header http.Header) (jsonutils.JSONObject, error)
 	IsCustomizedGetDetailsBody() bool
@@ -105,6 +108,8 @@ type IModelManager interface {
 	/* name uniqueness scope, system/domain/project, default is system */
 	NamespaceScope() rbacutils.TRbacScope
 	ResourceScope() rbacutils.TRbacScope
+
+	QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error)
 }
 
 type IModel interface {

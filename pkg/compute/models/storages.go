@@ -22,6 +22,7 @@ import (
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/tristate"
 	"yunion.io/x/pkg/util/compare"
 	"yunion.io/x/pkg/utils"
@@ -30,6 +31,7 @@ import (
 	api "yunion.io/x/onecloud/pkg/apis/compute"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/lockman"
+	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 	"yunion.io/x/onecloud/pkg/compute/options"
 	"yunion.io/x/onecloud/pkg/httperrors"
@@ -63,7 +65,7 @@ type SStorage struct {
 
 	Capacity    int64                `nullable:"false" list:"admin" update:"admin" create:"admin_required"`                           // Column(Integer, nullable=False) # capacity of disk in MB
 	Reserved    int64                `nullable:"true" default:"0" list:"admin" update:"admin"`                                        // Column(Integer, nullable=True, default=0)
-	StorageType string               `width:"32" charset:"ascii" nullable:"false" list:"user" update:"admin" create:"admin_required"` // Column(VARCHAR(32, charset='ascii'), nullable=False)
+	StorageType string               `width:"32" charset:"ascii" nullable:"false" list:"user" create:"admin_required"`                // Column(VARCHAR(32, charset='ascii'), nullable=False)
 	MediumType  string               `width:"32" charset:"ascii" nullable:"false" list:"user" update:"admin" create:"admin_required"` // Column(VARCHAR(32, charset='ascii'), nullable=False)
 	Cmtbound    float32              `nullable:"true" default:"1" list:"admin" update:"admin"`                                        // Column(Float, nullable=True)
 	StorageConf jsonutils.JSONObject `nullable:"true" get:"admin" update:"admin"`                                                     // = Column(JSONEncodedDict, nullable=True)
@@ -102,6 +104,14 @@ func (self *SStorage) AllowUpdateItem(ctx context.Context, userCred mcclient.Tok
 	return db.IsAdminAllowUpdate(userCred, self)
 }
 
+func (self *SStorage) ValidateUpdateData(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
+	driver := GetStorageDriver(self.StorageType)
+	if driver != nil {
+		return driver.ValidateUpdateData(ctx, userCred, data, self)
+	}
+	return data, nil
+}
+
 func (self *SStorage) PostUpdate(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data jsonutils.JSONObject) {
 	self.SStandaloneResourceBase.PostUpdate(ctx, userCred, query, data)
 
@@ -113,6 +123,19 @@ func (self *SStorage) PostUpdate(ctx context.Context, userCred mcclient.TokenCre
 			}
 		}
 	}
+
+	if update, _ := data.Bool("update_storage_conf"); update {
+		self.StartStorageUpdateTask(ctx, userCred)
+	}
+}
+
+func (self *SStorage) StartStorageUpdateTask(ctx context.Context, userCred mcclient.TokenCredential) error {
+	task, err := taskman.TaskManager.NewTask(ctx, "StorageUpdateTask", self, userCred, nil, "", "", nil)
+	if err != nil {
+		return err
+	}
+	task.ScheduleRun(nil)
+	return nil
 }
 
 func (self *SStorage) AllowDeleteItem(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data jsonutils.JSONObject) bool {
@@ -122,6 +145,30 @@ func (self *SStorage) AllowDeleteItem(ctx context.Context, userCred mcclient.Tok
 func (self *SStorage) Delete(ctx context.Context, userCred mcclient.TokenCredential) error {
 	DeleteResourceJointSchedtags(self, ctx, userCred)
 	return self.SStandaloneResourceBase.Delete(ctx, userCred)
+}
+
+func (manager *SStorageManager) GetStorageTypesByHostType(hostType string) ([]string, error) {
+	q := manager.Query("storage_type")
+	hosts := HostManager.Query().SubQuery()
+	hs := HoststorageManager.Query().SubQuery()
+	q = q.Join(hs, sqlchemy.Equals(q.Field("id"), hs.Field("storage_id"))).
+		Join(hosts, sqlchemy.Equals(hosts.Field("id"), hs.Field("host_id"))).
+		Filter(sqlchemy.Equals(hosts.Field("host_type"), hostType)).Distinct()
+	storages := []string{}
+	rows, err := q.Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var storage string
+		err = rows.Scan(&storage)
+		if err != nil {
+			return nil, errors.Wrap(err, "rows.Scan(&storage)")
+		}
+		storages = append(storages, storage)
+	}
+	return storages, nil
 }
 
 func (manager *SStorageManager) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
@@ -1052,6 +1099,10 @@ func (manager *SStorageManager) ListItemFilter(ctx context.Context, q *sqlchemy.
 		return nil, err
 	}
 	q = managedResourceFilterByCloudType(q, query, "", nil)
+	q, err = managedResourceFilterByDomain(q, query, "", nil)
+	if err != nil {
+		return nil, err
+	}
 
 	q, err = manager.SStandaloneResourceBaseManager.ListItemFilter(ctx, q, userCred, query)
 	if err != nil {

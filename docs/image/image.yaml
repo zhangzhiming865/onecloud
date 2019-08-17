@@ -107,14 +107,18 @@ put:
         $ref: "../schemas/image.yaml#/ImageResponse"
   tags:
     - images 
+
 get:
   parameters:
     - in: query
       name: format
+      enum: [vhd,vmdk,qcow2]
       type: string
+      description: 镜像下载格式
     - in: query
       name: torrent
       type: boolean
+      description: 下载torrent种子
   tags:
     - images 
 

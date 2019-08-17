@@ -17,13 +17,16 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
+	"time"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/sqlchemy"
 
 	"yunion.io/x/onecloud/pkg/appsrv"
 	"yunion.io/x/onecloud/pkg/cloudcommon/object"
+	"yunion.io/x/onecloud/pkg/cloudcommon/policy"
 	"yunion.io/x/onecloud/pkg/httperrors"
 	"yunion.io/x/onecloud/pkg/mcclient"
 	"yunion.io/x/onecloud/pkg/util/rbacutils"
@@ -53,7 +56,15 @@ func NewModelBaseManager(model interface{}, tableName string, keyword string, ke
 }
 
 func (manager *SModelBaseManager) GetIModelManager() IModelManager {
-	return manager.GetVirtualObject().(IModelManager)
+	virt := manager.GetVirtualObject()
+	if virt == nil {
+		panic(fmt.Sprintf("Forgot to call SetVirtualObject?"))
+	}
+	r, ok := virt.(IModelManager)
+	if !ok {
+		panic(fmt.Sprintf("Cannot convert virtual object to IModelManager: %#v", virt))
+	}
+	return r
 }
 
 func (manager *SModelBaseManager) SetAlias(alias string, aliasPlural string) {
@@ -203,7 +214,14 @@ func (manager *SModelBaseManager) GetExportExtraKeys(ctx context.Context, query 
 }
 
 func (manager *SModelBaseManager) CustomizeHandlerInfo(info *appsrv.SHandlerInfo) {
-	// do nothing
+	info.SetProcessTimeoutCallback(manager.GetIModelManager().SetHandlerProcessTimeout)
+}
+
+func (manager *SModelBaseManager) SetHandlerProcessTimeout(info *appsrv.SHandlerInfo, r *http.Request) time.Duration {
+	if r.Method == http.MethodGet && len(r.URL.Query().Get("export_keys")) > 0 {
+		return time.Hour * 2
+	}
+	return -time.Second
 }
 
 func (manager *SModelBaseManager) FetchCreateHeaderData(ctx context.Context, header http.Header) (jsonutils.JSONObject, error) {
@@ -244,6 +262,91 @@ func (manager *SModelBaseManager) NamespaceScope() rbacutils.TRbacScope {
 
 func (manager *SModelBaseManager) ResourceScope() rbacutils.TRbacScope {
 	return rbacutils.ScopeSystem
+}
+
+func (manager *SModelBaseManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error) {
+	return q, nil
+}
+
+func (manager *SModelBaseManager) AllowGetPropertyDistinctField(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject) bool {
+	return true
+}
+
+func (manager *SModelBaseManager) GetPropertyDistinctField(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject) (jsonutils.JSONObject, error) {
+	im, ok := manager.GetVirtualObject().(IModelManager)
+	if !ok {
+		im = manager
+	}
+	fn, err := query.GetArray("field")
+	efs, _ := query.GetArray("extra_field")
+	fields := make([]string, len(fn))
+
+	// validate field
+	for i, f := range fn {
+		fields[i], err = f.GetString()
+		if err != nil {
+			return nil, httperrors.NewInputParameterError("can't get string field")
+		}
+		var hasField = false
+		for _, field := range manager.getTable().Fields() {
+			if field.Name() == fields[i] {
+				hasField = true
+				break
+			}
+		}
+		if !hasField {
+			return nil, httperrors.NewBadRequestError("model has no field %s", fields[i])
+		}
+	}
+
+	var res = jsonutils.NewDict()
+	q := im.Query()
+	q, err = ListItemQueryFilters(im, ctx, q, userCred, query, policy.PolicyActionList)
+	if err != nil {
+		return nil, err
+	}
+	var backupQuery = *q
+
+	// query field
+	for i := 0; i < len(fields); i++ {
+		var nq = backupQuery
+		nq.AppendField(nq.Field(fields[i]))
+		of, err := nq.Distinct().AllStringMap()
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil && err != sql.ErrNoRows {
+			return nil, httperrors.NewInternalServerError("Query database error %s", err)
+		}
+		ofa := make([]string, len(of))
+		for j := 0; j < len(of); j++ {
+			ofa[j] = of[j][fields[i]]
+		}
+		res.Set(fields[i], jsonutils.Marshal(ofa))
+	}
+
+	// query extra field
+	for i := 0; i < len(efs); i++ {
+		nq := backupQuery
+		fe, _ := efs[i].GetString()
+		nqp, err := im.QueryDistinctExtraField(&nq, fe)
+		if err != nil {
+			return nil, err
+		}
+		ef, err := nqp.AllStringMap()
+		if err == sql.ErrNoRows {
+			continue
+		}
+		efa := make([]string, len(ef))
+		for i := 0; i < len(ef); i++ {
+			efa[i] = ef[i][fe]
+		}
+		if err != nil && err != sql.ErrNoRows {
+			return nil, httperrors.NewInternalServerError("Query database error %s", err)
+		}
+		res.Set(fe, jsonutils.Marshal(efa))
+	}
+	return res, nil
 }
 
 func (model *SModelBase) GetId() string {

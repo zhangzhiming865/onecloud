@@ -44,6 +44,15 @@ func (self *GuestBatchCreateTask) GetCreateInput() (*api.ServerCreateInput, erro
 	return input, err
 }
 
+func (self *GuestBatchCreateTask) clearPendingUsage(ctx context.Context, guest *models.SGuest) {
+	platform := make([]string, 0)
+	input, _ := self.GetCreateInput()
+	if len(input.Hypervisor) > 0 {
+		platform = models.GetDriver(input.Hypervisor).GetQuotaPlatformID()
+	}
+	ClearTaskPendingUsage(ctx, self, rbacutils.ScopeProject, guest.GetOwnerId(), platform)
+}
+
 func (self *GuestBatchCreateTask) OnInit(ctx context.Context, objs []db.IStandaloneModel, body jsonutils.JSONObject) {
 	StartScheduleObjects(ctx, self, objs)
 }
@@ -54,6 +63,7 @@ func (self *GuestBatchCreateTask) OnScheduleFailCallback(ctx context.Context, ob
 	if guest.DisableDelete.IsTrue() {
 		guest.SetDisableDelete(self.UserCred, false)
 	}
+	self.clearPendingUsage(ctx, guest)
 }
 
 func (self *GuestBatchCreateTask) SaveScheduleResultWithBackup(ctx context.Context, obj IScheduleModel, master, slave *schedapi.CandidateResource) {
@@ -98,15 +108,29 @@ func (self *GuestBatchCreateTask) allocateGuestOnHost(ctx context.Context, guest
 		guest.SetStatus(self.UserCred, api.VM_CREATE_FAILED, err.Error())
 		return err
 	}
+
+	// allocate networks
 	err = guest.CreateNetworksOnHost(ctx, self.UserCred, host, input.Networks, &pendingUsage, candidate.Nets)
 	self.SetPendingUsage(&pendingUsage)
-
 	if err != nil {
 		log.Errorf("Network failed: %s", err)
 		guest.SetStatus(self.UserCred, api.VM_NETWORK_FAILED, err.Error())
 		return err
 	}
 
+	// allocate eips
+	if input.EipBw > 0 {
+		eip, err := models.ElasticipManager.NewEipForVMOnHost(ctx, self.UserCred, guest, host, input.EipBw, input.EipChargeType, &pendingUsage)
+		self.SetPendingUsage(&pendingUsage)
+		if err != nil {
+			log.Errorf("guest.CreateElasticipOnHost failed: %s", err)
+			guest.SetStatus(self.UserCred, api.VM_NETWORK_FAILED, err.Error())
+			return err
+		}
+		input.Eip = eip.Id
+	}
+
+	// allocate disks
 	guest.GetDriver().PrepareDiskRaidConfig(self.UserCred, host, input.BaremetalDiskConfigs)
 	var backupCandidateDisks []*schedapi.CandidateDisk
 	if candidate.BackupCandidate != nil {
@@ -122,9 +146,9 @@ func (self *GuestBatchCreateTask) allocateGuestOnHost(ctx context.Context, guest
 		return err
 	}
 
+	// allocate GPUs
 	err = guest.CreateIsolatedDeviceOnHost(ctx, self.UserCred, host, input.IsolatedDevices, &pendingUsage)
 	self.SetPendingUsage(&pendingUsage)
-
 	if err != nil {
 		log.Errorf("IsolatedDevices create failed: %s", err)
 		guest.SetStatus(self.UserCred, api.VM_DEVICE_FAILED, err.Error())
@@ -175,6 +199,7 @@ func (self *GuestBatchCreateTask) SaveScheduleResult(ctx context.Context, obj IS
 
 	err = self.allocateGuestOnHost(ctx, guest, candidate)
 	if err != nil {
+		self.clearPendingUsage(ctx, guest)
 		db.OpsLog.LogEvent(guest, db.ACT_ALLOCATE_FAIL, err, self.UserCred)
 		logclient.AddActionLogWithStartable(self, obj, logclient.ACT_ALLOCATE, err.Error(), self.GetUserCred(), false)
 		notifyclient.NotifySystemError(guest.Id, guest.Name, api.VM_CREATE_FAILED, err.Error())

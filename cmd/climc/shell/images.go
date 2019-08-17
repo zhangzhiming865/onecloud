@@ -28,11 +28,11 @@ import (
 )
 
 type ImageOptionalOptions struct {
-	Public             bool     `help:"Make image public"`
-	Private            bool     `help:"Make image private"`
 	Format             string   `help:"Image format" choices:"raw|qcow2|iso|vmdk|docker|vhd"`
 	Protected          bool     `help:"Prevent image from being deleted"`
 	Unprotected        bool     `help:"Allow image to be deleted"`
+	Standard           bool     `help:"Mark image as a standard image"`
+	Nonstandard        bool     `help:"Mark image as a non-standard image"`
 	MinDisk            int64    `help:"Disk size after expanded, in MB" metavar:"MIN_DISK_SIZE_MB"`
 	MinRam             int64    `help:"Minimal memory size required" metavar:"MIN_RAM_MB"`
 	VirtualSize        int64    `help:"Disk size after expanded, in MB"`
@@ -55,11 +55,6 @@ type ImageOptionalOptions struct {
 }
 
 func addImageOptionalOptions(s *mcclient.ClientSession, params *jsonutils.JSONDict, args ImageOptionalOptions) error {
-	if args.Public && !args.Private {
-		params.Add(jsonutils.NewString("true"), "is-public")
-	} else if !args.Public && args.Private {
-		params.Add(jsonutils.NewString("false"), "is-public")
-	}
 	if len(args.Format) > 0 {
 		params.Add(jsonutils.NewString("bare"), "container-format")
 		params.Add(jsonutils.NewString(args.Format), "disk-format")
@@ -68,6 +63,11 @@ func addImageOptionalOptions(s *mcclient.ClientSession, params *jsonutils.JSONDi
 		params.Add(jsonutils.NewString("true"), "protected")
 	} else if !args.Protected && args.Unprotected {
 		params.Add(jsonutils.NewString("false"), "protected")
+	}
+	if args.Standard && !args.Nonstandard {
+		params.Add(jsonutils.JSONTrue, "is_standard")
+	} else if !args.Standard && args.Nonstandard {
+		params.Add(jsonutils.JSONFalse, "is_standard")
 	}
 	if args.MinDisk > 0 {
 		params.Add(jsonutils.NewString(fmt.Sprintf("%d", args.MinDisk)), "min_disk")
@@ -134,9 +134,11 @@ func init() {
 	type ImageListOptions struct {
 		options.BaseListOptions
 
-		IsPublic string   `help:"filter images public or not(True, False or None)" choices:"true|false|none"`
-		Format   []string `help:"Disk formats"`
-		Name     string   `help:"Name filter"`
+		IsPublic   string   `help:"filter images public or not(True, False or None)" choices:"true|false"`
+		IsStandard string   `help:"filter images standard or non-standard" choices:"true|false"`
+		Protected  string   `help:"filter images by protected" choices:"true|false"`
+		Format     []string `help:"Disk formats"`
+		Name       string   `help:"Name filter"`
 	}
 	R(&ImageListOptions{}, "image-list", "List images", func(s *mcclient.ClientSession, args *ImageListOptions) error {
 		params, err := args.Params()
@@ -145,6 +147,12 @@ func init() {
 		}
 		if len(args.IsPublic) > 0 {
 			params.Add(jsonutils.NewString(args.IsPublic), "is_public")
+		}
+		if len(args.IsStandard) > 0 {
+			params.Add(jsonutils.NewString(args.IsStandard), "is_standard")
+		}
+		if len(args.Protected) > 0 {
+			params.Add(jsonutils.NewString(args.Protected), "protected")
 		}
 		if len(args.Tenant) > 0 {
 			tid, e := modules.Projects.GetId(s, args.Tenant, nil)
@@ -215,19 +223,7 @@ func init() {
 	}
 
 	R(&ImageUpdateOptions{}, "image-update", "Update images meta infomation", func(s *mcclient.ClientSession, args *ImageUpdateOptions) error {
-		/* img, e := modules.Images.Get(s, args.ID, nil)
-		if e != nil {
-			return e
-		}
-		idstr, e := img.GetString("id")
-		if e != nil {
-			return e
-		}*/
 		params := jsonutils.NewDict()
-		/* properties, _ := img.Get("properties")
-		if properties != nil {
-			params.Add(properties, "properties")
-		}*/
 		if len(args.Name) > 0 {
 			params.Add(jsonutils.NewString(args.Name), "name")
 		}
@@ -268,7 +264,7 @@ func init() {
 
 	type ImageDeleteOptions struct {
 		ID                    []string `help:"Image ID or name"`
-		OverridePendingDelete *bool    `help:"Delete image directly instead of pending delete"`
+		OverridePendingDelete *bool    `help:"Delete image directly instead of pending delete" short-token:"f"`
 	}
 	R(&ImageDeleteOptions{}, "image-delete", "Delete a image", func(s *mcclient.ClientSession, args *ImageDeleteOptions) error {
 		params, err := options.StructToParams(args)
@@ -415,17 +411,26 @@ func init() {
 		return nil
 	})
 
-	R(&ImageOperationOptions{}, "image-public", "Make a image public", func(s *mcclient.ClientSession, args *ImageOperationOptions) error {
+	type ImagePublicOptions struct {
+		ID             []string `help:"ID or name of image" json:"-"`
+		Scope          string   `help:"sharing scope" choices:"system|domain"`
+		ShareToProject []string `help:"Share to prject"`
+	}
+	R(&ImagePublicOptions{}, "image-public", "Make a image public", func(s *mcclient.ClientSession, args *ImagePublicOptions) error {
+		params, err := options.StructToParams(args)
+		if err != nil {
+			return err
+		}
 		if len(args.ID) == 0 {
 			return fmt.Errorf("No image ID provided")
 		} else if len(args.ID) == 1 {
-			result, err := modules.Images.PerformAction(s, args.ID[0], "public", nil)
+			result, err := modules.Images.PerformAction(s, args.ID[0], "public", params)
 			if err != nil {
 				return err
 			}
 			printObject(result)
 		} else {
-			results := modules.Images.BatchPerformAction(s, args.ID, "public", nil)
+			results := modules.Images.BatchPerformAction(s, args.ID, "public", params)
 			printBatchResults(results, modules.Images.GetColumns(s))
 		}
 		return nil
@@ -447,18 +452,16 @@ func init() {
 
 	R(&ImageOperationOptions{}, "image-mark-standard", "Mark image standard", func(s *mcclient.ClientSession, args *ImageOperationOptions) error {
 		params := jsonutils.NewDict()
-		params.Add(jsonutils.JSONTrue, "is-public")
-		params.Add(jsonutils.JSONTrue, "protected")
-		results := modules.Images.BatchPerformAction(s, args.ID, "mark-public-protected", params)
+		params.Add(jsonutils.JSONTrue, "is_standard")
+		results := modules.Images.BatchPerformAction(s, args.ID, "mark-standard", params)
 		printBatchResults(results, modules.Images.GetColumns(s))
 		return nil
 	})
 
 	R(&ImageOperationOptions{}, "image-mark-unstandard", "Mark image not standard", func(s *mcclient.ClientSession, args *ImageOperationOptions) error {
 		params := jsonutils.NewDict()
-		params.Add(jsonutils.JSONFalse, "is-public")
-		params.Add(jsonutils.JSONFalse, "protected")
-		results := modules.Images.BatchPerformAction(s, args.ID, "mark-public-protected", params)
+		params.Add(jsonutils.JSONFalse, "is_standard")
+		results := modules.Images.BatchPerformAction(s, args.ID, "mark-standard", params)
 		printBatchResults(results, modules.Images.GetColumns(s))
 		return nil
 	})

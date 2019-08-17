@@ -20,10 +20,9 @@ import (
 	"fmt"
 	"time"
 
-	"yunion.io/x/pkg/errors"
-
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/tristate"
 	"yunion.io/x/sqlchemy"
 
@@ -87,6 +86,7 @@ type SUser struct {
 
 	IsSystemAccount tristate.TriState `nullable:"false" default:"false" list:"domain" update:"domain" create:"domain_optional"`
 
+	// deprecated
 	DefaultProjectId string `width:"64" charset:"ascii" nullable:"true"`
 
 	AllowWebConsole tristate.TriState `nullable:"false" default:"true" list:"domain" update:"domain" create:"domain_optional"`
@@ -116,10 +116,13 @@ func (manager *SUserManager) InitializeData() error {
 		if len(name) == 0 {
 			name = extUser.IdpName
 		}
-		desc, _ := users[i].Extra.GetString("description")
-		email, _ := users[i].Extra.GetString("email")
-		mobile, _ := users[i].Extra.GetString("mobile")
-		dispName, _ := users[i].Extra.GetString("displayname")
+		var desc, email, mobile, dispName string
+		if users[i].Extra != nil {
+			desc, _ = users[i].Extra.GetString("description")
+			email, _ = users[i].Extra.GetString("email")
+			mobile, _ = users[i].Extra.GetString("mobile")
+			dispName, _ = users[i].Extra.GetString("displayname")
+		}
 		_, err = db.Update(&users[i], func() error {
 			users[i].Name = name
 			if len(email) > 0 {
@@ -175,6 +178,19 @@ func (manager *SUserManager) initSysUser() error {
 		return errors.Wrap(err, "query")
 	}
 	if cnt == 1 {
+		// if ResetAdminUserPassword is true, reset sysadmin password
+		if options.Options.ResetAdminUserPassword {
+			usr := SUser{}
+			usr.SetModelManager(manager, &usr)
+			err = q.First(&usr)
+			if err != nil {
+				return errors.Wrap(err, "ResetAdminUserPassword Query user")
+			}
+			err = usr.initLocalData(options.Options.BootstrapAdminUserPassword)
+			if err != nil {
+				return errors.Wrap(err, "initLocalData")
+			}
+		}
 		return nil
 	}
 	if cnt > 2 {
@@ -186,6 +202,9 @@ func (manager *SUserManager) initSysUser() error {
 	usr.Name = api.SystemAdminUser
 	usr.DomainId = api.DEFAULT_DOMAIN_ID
 	usr.Enabled = tristate.True
+	usr.IsSystemAccount = tristate.False
+	usr.AllowWebConsole = tristate.False
+	usr.EnableMfa = tristate.False
 	usr.Description = "Boostrap system default admin user"
 	usr.SetModelManager(manager, &usr)
 
@@ -284,7 +303,7 @@ func localUserVerifyPassword(user *api.SUserExtended, passwd string) error {
 		return nil
 	}
 	//}
-	return fmt.Errorf("invalid password")
+	return fmt.Errorf("invalid password for %s", user.Name)
 }
 
 func (manager *SUserManager) ListItemFilter(ctx context.Context, q *sqlchemy.SQuery, userCred mcclient.TokenCredential, query jsonutils.JSONObject) (*sqlchemy.SQuery, error) {

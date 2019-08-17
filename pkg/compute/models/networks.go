@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -182,7 +183,72 @@ func (self *SNetwork) GetTotalNicCount() (int, error) {
 		return -1, err
 	}
 	total += cnt
+	cnt, err = self.GetNetworkInterfacesCount()
+	if err != nil {
+		return -1, err
+	}
+	total += cnt
 	return total, nil
+}
+
+/*验证elb network可用，并返回关联的region, zone,vpc, wire*/
+func (self *SNetwork) ValidateElbNetwork(ipAddr net.IP) (*SCloudregion, *SZone, *SVpc, *SWire, error) {
+	// 验证IP Address可用
+	if ipAddr != nil {
+		ipS := ipAddr.String()
+		ip, err := netutils.NewIPV4Addr(ipS)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		if !self.IsAddressInRange(ip) {
+			return nil, nil, nil, nil, httperrors.NewInputParameterError("address %s is not in the range of network %s(%s)",
+				ipS, self.Name, self.Id)
+		}
+
+		used, err := self.isAddressUsed(ipS)
+		if err != nil {
+			return nil, nil, nil, nil, httperrors.NewInternalServerError("isAddressUsed fail %s", err)
+		}
+		if used {
+			return nil, nil, nil, nil, httperrors.NewInputParameterError("address %s is already occupied", ipS)
+		}
+	}
+
+	// 验证网络存在剩余地址空间
+	freeCnt, err := self.getFreeAddressCount()
+	if err != nil {
+		return nil, nil, nil, nil, httperrors.NewInternalServerError("getFreeAddressCount fail %s", err)
+	}
+	if freeCnt <= 0 {
+		return nil, nil, nil, nil, httperrors.NewNotAcceptableError("network %s(%s) has no free addresses",
+			self.Name, self.Id)
+	}
+
+	// 验证网络可用
+	wire := self.GetWire()
+	if wire == nil {
+		return nil, nil, nil, nil, fmt.Errorf("getting wire failed")
+	}
+
+	vpc := wire.getVpc()
+	if vpc == nil {
+		return nil, nil, nil, nil, fmt.Errorf("getting vpc failed")
+	}
+
+	var zone *SZone
+	if len(wire.ZoneId) > 0 {
+		zone = wire.GetZone()
+		if zone == nil {
+			return nil, nil, nil, nil, fmt.Errorf("getting zone failed")
+		}
+	}
+
+	region := wire.getRegion()
+	if region == nil {
+		return nil, nil, nil, nil, fmt.Errorf("getting region failed")
+	}
+
+	return region, zone, vpc, wire, nil
 }
 
 func (self *SNetwork) GetGuestnicsCount() (int, error) {
@@ -209,6 +275,11 @@ func (self *SNetwork) GetEipsCount() (int, error) {
 	return ElasticipManager.Query().Equals("network_id", self.Id).CountWithError()
 }
 
+func (self *SNetwork) GetNetworkInterfacesCount() (int, error) {
+	sq := NetworkinterfacenetworkManager.Query("networkinterface_id").Equals("network_id", self.Id).Distinct().SubQuery()
+	return NetworkInterfaceManager.Query().In("id", sq).CountWithError()
+}
+
 func (self *SNetwork) GetUsedAddresses() map[string]bool {
 	used := make(map[string]bool)
 
@@ -219,6 +290,7 @@ func (self *SNetwork) GetUsedAddresses() map[string]bool {
 		ReservedipManager.Query().SubQuery(),
 		LoadbalancernetworkManager.Query().SubQuery(),
 		ElasticipManager.Query().SubQuery(),
+		NetworkinterfacenetworkManager.Query().SubQuery(),
 	} {
 		q := tbl.Query(tbl.Field("ip_addr")).Equals("network_id", self.Id)
 		rows, err := q.Rows()
@@ -1508,7 +1580,7 @@ func (manager *SNetworkManager) ListItemFilter(ctx context.Context, q *sqlchemy.
 		}
 		zone := zoneObj.(*SZone)
 		region := zone.GetRegion()
-		if utils.IsInStringArray(region.Provider, api.REGINAL_NETWORK_PROVIDERS) {
+		if utils.IsInStringArray(region.Provider, api.REGIONAL_NETWORK_PROVIDERS) {
 			wires := WireManager.Query().SubQuery()
 			vpcs := VpcManager.Query().SubQuery()
 
@@ -1589,6 +1661,26 @@ func (manager *SNetworkManager) ListItemFilter(ctx context.Context, q *sqlchemy.
 			Join(regions, sqlchemy.Equals(regions.Field("id"), vpcs.Field("cloudregion_id"))).
 			Filter(sqlchemy.Equals(regions.Field("city"), cityStr))
 		q = q.Filter(sqlchemy.In(q.Field("wire_id"), sq.SubQuery()))
+	}
+
+	return q, nil
+}
+
+func (manager *SNetworkManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error) {
+	switch field {
+	case "account":
+		vpcs := VpcManager.Query().SubQuery()
+		wires := WireManager.Query().SubQuery()
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query().Distinct().SubQuery()
+		q = q.Join(wires, sqlchemy.Equals(q.Field("wire_id"), wires.Field("id")))
+		q = q.Join(vpcs, sqlchemy.Equals(wires.Field("vpc_id"), vpcs.Field("id")))
+		q = q.Join(cloudproviders, sqlchemy.Equals(vpcs.Field("manager_id"), cloudproviders.Field("id")))
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
+		q.GroupBy(cloudaccounts.Field("name"))
+		q.AppendField(cloudaccounts.Field("name", "account"))
+	default:
+		return nil, httperrors.NewBadRequestError("unsupport field %s", field)
 	}
 
 	return q, nil

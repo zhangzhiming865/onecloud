@@ -475,6 +475,23 @@ func (manager *SGuestManager) OrderByExtraFields(ctx context.Context, q *sqlchem
 	return q, nil
 }
 
+func (manager *SGuestManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error) {
+	switch field {
+	case "account":
+		hosts := HostManager.Query().SubQuery()
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query().SubQuery()
+		q = q.Join(hosts, sqlchemy.Equals(q.Field("host_id"), hosts.Field("id")))
+		q = q.Join(cloudproviders, sqlchemy.Equals(hosts.Field("manager_id"), cloudproviders.Field("id")))
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
+		q.GroupBy(cloudaccounts.Field("name"))
+		q.AppendField(cloudaccounts.Field("name", "account"))
+	default:
+		return nil, httperrors.NewBadRequestError("unsupport field %s", field)
+	}
+	return q, nil
+}
+
 func (guest *SGuest) GetHypervisor() string {
 	if len(guest.Hypervisor) == 0 {
 		return api.HYPERVISOR_DEFAULT
@@ -519,6 +536,31 @@ func (guest *SGuest) GetDisksQuery() *sqlchemy.SQuery {
 
 func (guest *SGuest) DiskCount() (int, error) {
 	return guest.GetDisksQuery().CountWithError()
+}
+
+func (guest *SGuest) GetSystemDisk() (*SDisk, error) {
+	q := DiskManager.Query().Equals("disk_type", api.DISK_TYPE_SYS)
+	gs := GuestdiskManager.Query().SubQuery()
+	q = q.Join(gs, sqlchemy.Equals(gs.Field("disk_id"), q.Field("id"))).
+		Filter(sqlchemy.Equals(gs.Field("guest_id"), guest.Id))
+
+	count, err := q.CountWithError()
+	if err != nil {
+		return nil, err
+	}
+	if count > 1 {
+		return nil, sqlchemy.ErrDuplicateEntry
+	}
+	if count == 0 {
+		return nil, sql.ErrNoRows
+	}
+	disk := &SDisk{}
+	err = q.First(disk)
+	if err != nil {
+		return nil, errors.Wrap(err, "q.First(disk)")
+	}
+	disk.SetModelManager(DiskManager, disk)
+	return disk, nil
 }
 
 func (guest *SGuest) GetDisks() []SGuestdisk {
@@ -1311,6 +1353,12 @@ func (self *SGuest) GetCustomizeColumns(ctx context.Context, userCred mcclient.T
 func (self *SGuest) moreExtraInfo(extra *jsonutils.JSONDict, fields stringutils2.SSortedStrings) *jsonutils.JSONDict {
 	// extra.Add(jsonutils.NewInt(int64(self.getExtBandwidth())), "ext_bw")
 
+	if self.IsPrepaidRecycle() {
+		extra.Add(jsonutils.JSONTrue, "is_prepaid_recycle")
+	} else {
+		extra.Add(jsonutils.JSONFalse, "is_prepaid_recycle")
+	}
+
 	if len(self.BackupHostId) > 0 && (len(fields) == 0 || fields.Contains("backup_host_name") || fields.Contains("backup_host_status")) {
 		backupHost := HostManager.FetchHostById(self.BackupHostId)
 		if len(fields) == 0 || fields.Contains("backup_host_name") {
@@ -1392,12 +1440,6 @@ func (self *SGuest) GetExtraDetails(ctx context.Context, userCred mcclient.Token
 		extra.Add(jsonutils.NewString(self.getAdminSecurityRules()), "admin_security_rules")
 	}
 
-	if self.IsPrepaidRecycle() {
-		extra.Add(jsonutils.JSONTrue, "is_prepaid_recycle")
-	} else {
-		extra.Add(jsonutils.JSONFalse, "is_prepaid_recycle")
-	}
-
 	return self.moreExtraInfo(extra, nil), nil
 }
 
@@ -1445,6 +1487,16 @@ func (manager *SGuestManager) ListItemExportKeys(ctx context.Context, q *sqlchem
 		q.AppendField(hostSubQuery.Field("name", "host"))
 	}
 
+	if utils.IsInStringArray("zone", keys) {
+		zoneQuery := ZoneManager.Query("id", "name").SubQuery()
+		hostQuery := HostManager.Query("id", "zone_id").GroupBy("id")
+		hostQuery.LeftJoin(zoneQuery, sqlchemy.Equals(hostQuery.Field("zone_id"), zoneQuery.Field("id")))
+		hostQuery.AppendField(zoneQuery.Field("name", "zone"))
+		hostSubQuery := hostQuery.SubQuery()
+		q.LeftJoin(hostSubQuery, sqlchemy.Equals(q.Field("host_id"), hostSubQuery.Field("id")))
+		q.AppendField(hostSubQuery.Field("zone"))
+	}
+
 	// host_id as filter key
 	if utils.IsInStringArray("region", keys) {
 		zoneQuery := ZoneManager.Query("id", "cloudregion_id").SubQuery()
@@ -1486,6 +1538,9 @@ func (manager *SGuestManager) GetExportExtraKeys(ctx context.Context, query json
 	}
 	if host, ok := rowMap["host"]; ok && len(host) > 0 {
 		res.Set("host", jsonutils.NewString(host))
+	}
+	if zone, ok := rowMap["zone"]; ok && len(zone) > 0 {
+		res.Set("zone", jsonutils.NewString(zone))
 	}
 	if region, ok := rowMap["region"]; ok && len(region) > 0 {
 		res.Set("region", jsonutils.NewString(region))
@@ -4239,29 +4294,26 @@ func (self *SGuest) ToCreateInput(userCred mcclient.TokenCredential) *api.Server
 	}
 	if self.GetHypervisor() != api.HYPERVISOR_BAREMETAL {
 		// fill missing create params like schedtags
+		disks := []*api.DiskConfig{}
 		for idx, disk := range genInput.Disks {
+			tmpD := disk
 			if idx < len(userInput.Disks) {
-				disk.Schedtags = userInput.Disks[idx].Schedtags
-				userInput.Disks[idx] = disk
-			} else {
-				userInput.Disks = append(userInput.Disks, disk)
+				tmpD.Schedtags = userInput.Disks[idx].Schedtags
 			}
+			disks = append(disks, tmpD)
 		}
+		userInput.Disks = disks
 	}
+	nets := []*api.NetworkConfig{}
 	for idx, net := range genInput.Networks {
+		tmpN := net
 		if idx < len(userInput.Networks) {
-			userInput.Networks[idx] = net
-		} else {
-			userInput.Networks = append(userInput.Networks, net)
+			tmpN.Schedtags = userInput.Disks[idx].Schedtags
 		}
+		nets = append(nets, tmpN)
 	}
-	for idx, dev := range genInput.IsolatedDevices {
-		if idx < len(userInput.IsolatedDevices) {
-			userInput.IsolatedDevices[idx] = dev
-		} else {
-			userInput.IsolatedDevices = append(userInput.IsolatedDevices, dev)
-		}
-	}
+	userInput.Networks = nets
+	userInput.IsolatedDevices = genInput.IsolatedDevices
 	userInput.Count = 1
 	// override some old userInput properties via genInput because of change config behavior
 	userInput.VmemSize = genInput.VmemSize
@@ -4280,12 +4332,17 @@ func (self *SGuest) ToCreateInput(userCred mcclient.TokenCredential) *api.Server
 	if genInput.ResourceType != "" {
 		userInput.ResourceType = genInput.ResourceType
 	}
+	if genInput.InstanceType != "" {
+		userInput.InstanceType = genInput.InstanceType
+	}
 	if genInput.PreferRegion != "" {
 		userInput.PreferRegion = genInput.PreferRegion
 	}
 	if genInput.PreferZone != "" {
 		userInput.PreferZone = genInput.PreferZone
 	}
+	// clean GenerateName
+	userInput.GenerateName = ""
 	return userInput
 }
 

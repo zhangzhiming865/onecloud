@@ -126,7 +126,8 @@ func (self *GuestDeleteTask) OnDiskDetachComplete(ctx context.Context, obj db.IS
 		self.doClearSecurityGroupComplete(ctx, guest)
 		return
 	}
-	guest.StartGuestDetachdiskTask(ctx, self.UserCred, lastDisk, true, self.GetTaskId())
+	purge := jsonutils.QueryBoolean(self.Params, "purge", false)
+	guest.StartGuestDetachdiskTask(ctx, self.UserCred, lastDisk, true, self.GetTaskId(), purge)
 }
 
 func (self *GuestDeleteTask) OnDiskDetachCompleteFailed(ctx context.Context, obj db.IStandaloneModel, err jsonutils.JSONObject) {
@@ -278,6 +279,11 @@ func (self *GuestDeleteTask) DeleteGuest(ctx context.Context, guest *models.SGue
 }
 
 func (self *GuestDeleteTask) NotifyServerDeleted(ctx context.Context, guest *models.SGuest) {
-	guest.NotifyServerEvent(self.UserCred, notifyclient.SERVER_DELETED, notify.NotifyPriorityImportant, false)
+	guest.NotifyServerEvent(
+		self.UserCred,
+		notifyclient.SERVER_DELETED,
+		notify.NotifyPriorityImportant,
+		false, nil, false,
+	)
 	guest.NotifyAdminServerEvent(ctx, notifyclient.SERVER_DELETED_ADMIN, notify.NotifyPriorityImportant)
 }

@@ -615,6 +615,10 @@ func chooseCandidateNetworksByNetworkType(nets []SNetwork, isExit bool, serverTy
 }
 
 func (self *SWire) GetZone() *SZone {
+	if self.ZoneId == "" {
+		return nil
+	}
+
 	return ZoneManager.FetchZoneById(self.ZoneId)
 }
 
@@ -733,6 +737,15 @@ func (manager *SWireManager) ListItemFilter(ctx context.Context, q *sqlchemy.SQu
 		return subq
 	})
 
+	q, err = managedResourceFilterByDomain(q, query, "vpc_id", func() *sqlchemy.SQuery {
+		vpcs := VpcManager.Query().SubQuery()
+		subq := vpcs.Query(vpcs.Field("id"))
+		return subq
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	q, err = manager.SStandaloneResourceBaseManager.ListItemFilter(ctx, q, userCred, query)
 	if err != nil {
 		return nil, err
@@ -816,6 +829,13 @@ func (self *SWire) getRegion() *SCloudregion {
 	if zone != nil {
 		return zone.GetRegion()
 	}
+
+	vpc := self.getVpc()
+	if vpc != nil {
+		region, _ := vpc.GetRegion()
+		return region
+	}
+
 	return nil
 }
 

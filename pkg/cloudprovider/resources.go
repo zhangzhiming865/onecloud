@@ -41,6 +41,8 @@ type ICloudResource interface {
 }
 
 type IVirtualResource interface {
+	ICloudResource
+
 	GetProjectId() string
 }
 
@@ -95,6 +97,7 @@ type ICloudRegion interface {
 	GetILoadBalancers() ([]ICloudLoadbalancer, error)
 	GetILoadBalancerAcls() ([]ICloudLoadbalancerAcl, error)
 	GetILoadBalancerCertificates() ([]ICloudLoadbalancerCertificate, error)
+	GetILoadBalancerBackendGroups() ([]ICloudLoadbalancerBackendGroup, error) // for aws only
 
 	GetILoadBalancerById(loadbalancerId string) (ICloudLoadbalancer, error)
 	GetILoadBalancerAclById(aclId string) (ICloudLoadbalancerAcl, error)
@@ -107,6 +110,17 @@ type ICloudRegion interface {
 	GetISkuById(skuId string) (ICloudSku, error)
 	GetISkus(zoneId string) ([]ICloudSku, error)
 	CreateISku(sku *SServerSku) (ICloudSku, error)
+
+	GetINetworkInterfaces() ([]ICloudNetworkInterface, error)
+
+	GetIBuckets() ([]ICloudBucket, error)
+	CreateIBucket(name string, storageClassStr string, acl string) error
+	DeleteIBucket(name string) error
+	IBucketExist(name string) (bool, error)
+	GetIBucketById(name string) (ICloudBucket, error)
+
+	GetIDBInstances() ([]ICloudDBInstance, error)
+	GetIDBInstanceBackups() ([]ICloudDBInstanceBackup, error)
 
 	GetProvider() string
 }
@@ -214,7 +228,6 @@ type ICloudHost interface {
 }
 
 type ICloudVM interface {
-	ICloudResource
 	IBillingResource
 	IVirtualResource
 
@@ -283,7 +296,6 @@ type ICloudNic interface {
 }
 
 type ICloudEIP interface {
-	ICloudResource
 	IBillingResource
 	IVirtualResource
 
@@ -307,7 +319,6 @@ type ICloudEIP interface {
 
 type ICloudSecurityGroup interface {
 	ICloudResource
-	IVirtualResource
 
 	GetDescription() string
 	GetRules() ([]secrules.SecurityRule, error)
@@ -332,7 +343,6 @@ type ICloudRoute interface {
 }
 
 type ICloudDisk interface {
-	ICloudResource
 	IBillingResource
 	IVirtualResource
 
@@ -369,7 +379,6 @@ type ICloudDisk interface {
 }
 
 type ICloudSnapshot interface {
-	ICloudResource
 	IVirtualResource
 
 	GetSize() int32
@@ -379,7 +388,6 @@ type ICloudSnapshot interface {
 }
 
 type ICloudSnapshotPolicy interface {
-	ICloudResource
 	IVirtualResource
 
 	GetRetentionDays() int
@@ -417,7 +425,6 @@ type ICloudWire interface {
 }
 
 type ICloudNetwork interface {
-	ICloudResource
 	IVirtualResource
 
 	GetIWire() ICloudWire
@@ -447,13 +454,12 @@ type ICloudHostNetInterface interface {
 }
 
 type ICloudLoadbalancer interface {
-	ICloudResource
 	IVirtualResource
 
 	GetAddress() string
 	GetAddressType() string
 	GetNetworkType() string
-	GetNetworkId() string
+	GetNetworkIds() []string
 	GetVpcId() string
 	GetZoneId() string
 	GetLoadbalancerSpec() string
@@ -478,7 +484,6 @@ type ICloudLoadbalancer interface {
 }
 
 type ICloudLoadbalancerListener interface {
-	ICloudResource
 	IVirtualResource
 
 	GetListenerType() string
@@ -530,33 +535,36 @@ type ICloudLoadbalancerListener interface {
 }
 
 type ICloudLoadbalancerListenerRule interface {
-	ICloudResource
 	IVirtualResource
 
 	GetDomain() string
 	GetPath() string
+	GetCondition() string
 	GetBackendGroupId() string
 
 	Delete() error
 }
 
 type ICloudLoadbalancerBackendGroup interface {
-	ICloudResource
 	IVirtualResource
 
 	IsDefault() bool
 	GetType() string
+	GetLoadbalancerId() string
 	GetILoadbalancerBackends() ([]ICloudLoadbalancerBackend, error)
 	GetILoadbalancerBackendById(backendId string) (ICloudLoadbalancerBackend, error)
+	GetProtocolType() string                                // huawei only .后端云服务器组的后端协议。
+	GetScheduler() string                                   // huawei only
+	GetHealthCheck() (*SLoadbalancerHealthCheck, error)     // huawei only
+	GetStickySession() (*SLoadbalancerStickySession, error) // huawei only
 	AddBackendServer(serverId string, weight int, port int) (ICloudLoadbalancerBackend, error)
 	RemoveBackendServer(serverId string, weight int, port int) error
 
 	Delete() error
-	Sync(name string) error
+	Sync(group *SLoadbalancerBackendGroup) error
 }
 
 type ICloudLoadbalancerBackend interface {
-	ICloudResource
 	IVirtualResource
 
 	GetWeight() int
@@ -568,7 +576,6 @@ type ICloudLoadbalancerBackend interface {
 }
 
 type ICloudLoadbalancerCertificate interface {
-	ICloudResource
 	IVirtualResource
 
 	Sync(name, privateKey, publickKey string) error
@@ -578,12 +585,14 @@ type ICloudLoadbalancerCertificate interface {
 	GetSubjectAlternativeNames() string
 	GetFingerprint() string // return value format: <algo>:<fingerprint>，比如sha1:7454a14fdb8ae1ea8b2f72e458a24a76bd23ec19
 	GetExpireTime() time.Time
+	GetPublickKey() string
+	GetPrivateKey() string
 }
 
 type ICloudLoadbalancerAcl interface {
-	ICloudResource
 	IVirtualResource
 
+	GetAclListenerID() string // huawei only
 	GetAclEntries() []SLoadbalancerAccessControlListEntry
 	Sync(acl *SLoadbalancerAccessControlList) error
 	Delete() error
@@ -637,11 +646,21 @@ type ICloudNatGateway interface {
 	// 获取 NAT 规格
 	GetNatSpec() string
 	GetIEips() ([]ICloudEIP, error)
-	GetINatDTables() ([]ICloudNatDTable, error)
-	GetINatSTables() ([]ICloudNatSTable, error)
+	GetINatDTable() ([]ICloudNatDEntry, error)
+	GetINatSTable() ([]ICloudNatSEntry, error)
+
+	// ID is the ID of snat entry/rule or dnat entry/rule.
+	GetINatDEntryByID(id string) (ICloudNatDEntry, error)
+	GetINatSEntryByID(id string) (ICloudNatSEntry, error)
+
+	// Read the description of these two structures before using.
+	CreateINatDEntry(rule SNatDRule) (ICloudNatDEntry, error)
+	CreateINatSEntry(rule SNatSRule) (ICloudNatSEntry, error)
 }
 
-type ICloudNatDTable interface {
+// ICloudNatDEntry describe a DNat rule which transfer externalIp:externalPort to
+// internalIp:internalPort with IpProtocol(tcp/udp)
+type ICloudNatDEntry interface {
 	ICloudResource
 
 	GetIpProtocol() string
@@ -650,12 +669,101 @@ type ICloudNatDTable interface {
 
 	GetInternalIp() string
 	GetInternalPort() int
+
+	Delete() error
 }
 
-type ICloudNatSTable interface {
+// ICloudNatSEntry describe a SNat rule which transfer internalIp(GetIP()) to externalIp which from sourceCIDR
+type ICloudNatSEntry interface {
 	ICloudResource
 
 	GetIP() string
 	GetSourceCIDR() string
 	GetNetworkId() string
+
+	Delete() error
+}
+
+type ICloudNetworkInterface interface {
+	ICloudResource
+
+	GetMacAddress() string
+	GetAssociateType() string
+	GetAssociateId() string
+
+	GetICloudInterfaceAddresses() ([]ICloudInterfaceAddress, error)
+}
+
+type ICloudInterfaceAddress interface {
+	GetGlobalId() string //返回IP即可
+
+	GetINetworkId() string
+	GetIP() string
+	IsPrimary() bool
+}
+
+type ICloudDBInstance interface {
+	IVirtualResource
+	IBillingResource
+
+	GetPort() int
+	GetEngine() string
+	GetEngineVersion() string
+	//实例规格
+	GetInstanceType() string
+
+	GetVcpuCount() int
+	GetVmemSizeMB() int //MB
+	GetDiskSizeGB() int
+	//基础版、高可用？
+	GetCategory() string
+
+	GetMaintainTime() string
+
+	GetConnectionStr() string
+	GetInternalConnectionStr() string
+	GetIZoneId() string
+	GetIVpcId() string
+
+	GetDBNetwork() (*SDBInstanceNetwork, error)
+	GetIDBInstanceParameters() ([]ICloudDBInstanceParameter, error)
+	GetIDBInstanceDatabases() ([]ICloudDBInstanceDatabase, error)
+	GetIDBInstanceAccounts() ([]ICloudDBInstanceAccount, error)
+}
+
+type ICloudDBInstanceParameter interface {
+	GetGlobalId() string
+	GetKey() string
+	GetValue() string
+	GetDescription() string
+}
+
+type ICloudDBInstanceBackup interface {
+	ICloudResource
+
+	GetDBInstanceId() string
+	GetStartTime() time.Time
+	GetEndTime() time.Time
+	GetBackupSizeMb() int
+	GetDBNames() string
+	GetBackupMode() string
+}
+
+type ICloudDBInstanceDatabase interface {
+	ICloudResource
+
+	GetCharacterSet() string
+}
+
+type ICloudDBInstanceAccount interface {
+	ICloudResource
+
+	GetIDBInstanceAccountPrivileges() ([]ICloudDBInstanceAccountPrivilege, error)
+}
+
+type ICloudDBInstanceAccountPrivilege interface {
+	GetGlobalId() string
+
+	GetPrivilege() string
+	GetDBName() string
 }
