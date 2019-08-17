@@ -108,7 +108,7 @@ func (p *Partition) Format(fs string, uuid string) error {
 		cmdUUID = []string{"/usr/sbin/tune2fs", "-U", uuid}
 	case "ext4":
 		// for baremetal, force 64bit support large disks
-		cmd = []string{"/usr/sbin/mkfs.ext4", "-O", "64bit", "-E", "lazy_itable_init=1"}
+		cmd = []string{"/usr/sbin/mkfs.ext4", "-O", "64bit", "-E", "lazy_itable_init=1", "-T", "largefile"}
 		cmdUUID = []string{"/usr/sbin/tune2fs", "-U", uuid}
 	case "ext4dev":
 		cmd = []string{"/usr/sbin/mkfs.ext4dev", "-E", "lazy_itable_init=1"}
@@ -424,7 +424,7 @@ func (ps *DiskPartitions) ResizePartition(offsetMB int64) error {
 			}
 		} else {
 			cmd = fmt.Sprintf("/usr/sbin/parted -a none -s %s -- unit s rm %d mkpart %s", part.disk.dev, part.index, part.diskType)
-			cmd = fmt.Sprintf("%s %d %d", cmd, part.start, part.end)
+			cmd = fmt.Sprintf("%s %d %d", cmd, part.start, end)
 			if part.bootable {
 				cmd = fmt.Sprintf("%s set %d boot on", cmd, part.index)
 			}

@@ -535,21 +535,13 @@ func init() {
 	})
 
 	type ServerChangeOwnerOptions struct {
-		ID      string `help:"Server to change owner"`
-		PROJECT string `help:"Project ID or change"`
-		RawId   bool   `help:"User raw ID, instead of name"`
+		ID      string `help:"Server to change owner" json:"-"`
+		PROJECT string `help:"Project ID or change" json:"tenant"`
 	}
 	R(&ServerChangeOwnerOptions{}, "server-change-owner", "Change owner porject of a server", func(s *mcclient.ClientSession, opts *ServerChangeOwnerOptions) error {
-		params := jsonutils.NewDict()
-		if opts.RawId {
-			projid, err := modules.Projects.GetId(s, opts.PROJECT, nil)
-			if err != nil {
-				return err
-			}
-			params.Add(jsonutils.NewString(projid), "tenant")
-			params.Add(jsonutils.JSONTrue, "raw_id")
-		} else {
-			params.Add(jsonutils.NewString(opts.PROJECT), "tenant")
+		params, err := options.StructToParams(opts)
+		if err != nil {
+			return err
 		}
 		srv, err := modules.Servers.PerformAction(s, opts.ID, "change-owner", params)
 		if err != nil {
@@ -978,6 +970,31 @@ func init() {
 			params.Set("extra_cmdline", jsonutils.NewStringArray(args.ExtraCmdline))
 		}
 		result, err := modules.Servers.GetSpecific(s, args.ID, "virt-install", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
+		return nil
+	})
+
+	R(&options.ServerIdOptions{}, "server-remote-nics", "Show remote nics of a server", func(s *mcclient.ClientSession, opts *options.ServerIdOptions) error {
+		result, err := modules.Servers.GetSpecific(s, opts.ID, "remote-nics", nil)
+		if err != nil {
+			return err
+		}
+		listResult := modules.ListResult{}
+		listResult.Data, _ = result.GetArray()
+		printList(&listResult, nil)
+		return nil
+	})
+
+	type ServerSyncFixNicsOptions struct {
+		ID string   `help:"ID or name of VM" json:"-"`
+		IP []string `help:"IP address of each NIC" json:"ip"`
+	}
+	R(&ServerSyncFixNicsOptions{}, "server-sync-fix-nics", "Fix missing IP for each nics after syncing VNICS", func(s *mcclient.ClientSession, opts *ServerSyncFixNicsOptions) error {
+		params := jsonutils.Marshal(opts)
+		result, err := modules.Servers.PerformAction(s, opts.ID, "sync-fix-nics", params)
 		if err != nil {
 			return err
 		}

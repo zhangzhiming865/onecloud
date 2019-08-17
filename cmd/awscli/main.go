@@ -18,16 +18,16 @@ import (
 	"fmt"
 	"os"
 
-	"yunion.io/x/log"
 	"yunion.io/x/structarg"
 
-	"yunion.io/x/onecloud/pkg/util/aws"
-	_ "yunion.io/x/onecloud/pkg/util/aws/shell"
+	"yunion.io/x/onecloud/pkg/multicloud/aws"
+	_ "yunion.io/x/onecloud/pkg/multicloud/aws/shell"
 	"yunion.io/x/onecloud/pkg/util/shellutils"
 )
 
 type BaseOptions struct {
 	Help       bool   `help:"Show help"`
+	Debug      bool   `help:"debug mode"`
 	AccessUrl  string `help:"Access key" default:"$AWS_ACCESS_URL" choices:"ChinaCloud|InternationalCloud"`
 	AccessKey  string `help:"Access key" default:"$AWS_ACCESS_KEY"`
 	Secret     string `help:"Secret" default:"$AWS_SECRET"`
@@ -71,7 +71,8 @@ func getSubcommandParser() (*structarg.ArgumentParser, error) {
 }
 
 func showErrorAndExit(e error) {
-	log.Errorf("%s", e)
+	fmt.Fprintf(os.Stderr, "%s", e)
+	fmt.Fprintln(os.Stderr)
 	os.Exit(1)
 }
 
@@ -84,7 +85,7 @@ func newClient(options *BaseOptions) (*aws.SRegion, error) {
 		return nil, fmt.Errorf("Missing secret")
 	}
 
-	cli, err := aws.NewAwsClient("", "", options.AccessUrl, options.AccessKey, options.Secret)
+	cli, err := aws.NewAwsClient("", "", options.AccessUrl, options.AccessKey, options.Secret, options.Debug)
 	if err != nil {
 		return nil, err
 	}

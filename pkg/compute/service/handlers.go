@@ -64,6 +64,7 @@ func InitHandlers(app *appsrv.Application) {
 	for _, manager := range []db.IModelManager{
 		db.OpsLog,
 		db.Metadata,
+		models.BucketManager,
 		models.CloudaccountManager,
 		models.CloudproviderManager,
 		models.CloudregionManager,
@@ -89,8 +90,8 @@ func InitHandlers(app *appsrv.Application) {
 		models.DnsRecordManager,
 		models.ElasticipManager,
 		models.NatGatewayManager,
-		models.NatDTableManager,
-		models.NatSTableManager,
+		models.NatDEntryManager,
+		models.NatSEntryManager,
 		models.SnapshotManager,
 		models.SnapshotPolicyManager,
 		models.BaremetalagentManager,
@@ -103,6 +104,12 @@ func InitHandlers(app *appsrv.Application) {
 		models.LoadbalancerAclManager,
 		models.LoadbalancerAgentManager,
 		models.LoadbalancerClusterManager,
+		models.CachedLoadbalancerAclManager,
+		models.CachedLoadbalancerCertificateManager,
+		models.HuaweiCachedLbManager,
+		models.HuaweiCachedLbbgManager,
+		models.AwsCachedLbManager,
+		models.AwsCachedLbbgManager,
 		models.RouteTableManager,
 
 		models.SchedpolicyManager,
@@ -110,6 +117,14 @@ func InitHandlers(app *appsrv.Application) {
 
 		models.ServerSkuManager,
 		models.ExternalProjectManager,
+		models.NetworkInterfaceManager,
+		models.NetworkinterfacenetworkManager,
+		models.DBInstanceManager,
+		models.DBInstanceBackupManager,
+		models.DBInstanceParameterManager,
+		models.DBInstanceDatabaseManager,
+		models.DBInstanceAccountManager,
+		models.DBInstancePrivilegeManager,
 	} {
 		db.RegisterModelManager(manager)
 		handler := db.NewModelHandler(manager)
@@ -131,6 +146,7 @@ func InitHandlers(app *appsrv.Application) {
 		models.GroupguestManager,
 		models.StoragecachedimageManager,
 		models.CloudproviderRegionManager,
+		models.DBInstanceNetworkManager,
 	} {
 		db.RegisterModelManager(manager)
 		handler := db.NewJointModelHandler(manager)

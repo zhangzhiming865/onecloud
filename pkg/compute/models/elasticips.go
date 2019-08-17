@@ -350,17 +350,17 @@ func (self *SElasticip) syncRemoveCloudEip(ctx context.Context, userCred mcclien
 }
 
 func (self *SElasticip) SyncInstanceWithCloudEip(ctx context.Context, userCred mcclient.TokenCredential, ext cloudprovider.ICloudEIP) error {
-	vm := self.GetAssociateVM()
+	resource := self.GetAssociateResource()
 	vmExtId := ext.GetAssociationExternalId()
 
-	if vm == nil && len(vmExtId) == 0 {
+	if resource == nil && len(vmExtId) == 0 {
 		return nil
 	}
-	if vm != nil && vm.ExternalId == vmExtId {
+	if resource != nil && resource.(db.IExternalizedModel).GetExternalId() == vmExtId {
 		return nil
 	}
 
-	if vm != nil { // dissociate
+	if resource != nil { // dissociate
 		err := self.Dissociate(ctx, userCred)
 		if err != nil {
 			log.Errorf("fail to dissociate vm: %s", err)
@@ -369,12 +369,33 @@ func (self *SElasticip) SyncInstanceWithCloudEip(ctx context.Context, userCred m
 	}
 
 	if len(vmExtId) > 0 {
-		newVM, err := db.FetchByExternalId(GuestManager, vmExtId)
+		var manager db.IModelManager
+		switch ext.GetAssociationType() {
+		case api.EIP_ASSOCIATE_TYPE_SERVER:
+			manager = GuestManager
+		case api.EIP_ASSOCIATE_TYPE_NAT_GATEWAY:
+			manager = NatGatewayManager
+		case api.EIP_ASSOCIATE_TYPE_LOADBALANCER:
+			manager = LoadbalancerManager
+		default:
+			return errors.Error("unsupported association type")
+		}
+
+		extRes, err := db.FetchByExternalId(manager, vmExtId)
 		if err != nil {
 			log.Errorf("fail to find vm by external ID %s", vmExtId)
 			return err
 		}
-		err = self.AssociateVM(ctx, userCred, newVM.(*SGuest))
+		switch newRes := extRes.(type) {
+		case *SGuest:
+			err = self.AssociateVM(ctx, userCred, newRes)
+		case *SLoadbalancer:
+			err = self.AssociateLoadbalancer(ctx, userCred, newRes)
+		case *SNatGateway:
+			err = self.AssociateNatGateway(ctx, userCred, newRes)
+		default:
+			return errors.Error("unsupported association type")
+		}
 		if err != nil {
 			log.Errorf("fail to associate with new vm %s", err)
 			return err
@@ -490,6 +511,9 @@ func (self *SElasticip) IsAssociated() bool {
 	if self.GetAssociateVM() != nil {
 		return true
 	}
+	if self.GetAssociateLoadbalancer() != nil {
+		return true
+	}
 	if self.GetAssociateNatGateway() != nil {
 		return true
 	}
@@ -499,6 +523,21 @@ func (self *SElasticip) IsAssociated() bool {
 func (self *SElasticip) GetAssociateVM() *SGuest {
 	if self.AssociateType == api.EIP_ASSOCIATE_TYPE_SERVER && len(self.AssociateId) > 0 {
 		return GuestManager.FetchGuestById(self.AssociateId)
+	}
+	return nil
+}
+
+func (self *SElasticip) GetAssociateLoadbalancer() *SLoadbalancer {
+	if self.AssociateType == api.EIP_ASSOCIATE_TYPE_LOADBALANCER && len(self.AssociateId) > 0 {
+		_lb, err := LoadbalancerManager.FetchById(self.AssociateId)
+		if err != nil {
+			return nil
+		}
+		lb := _lb.(*SLoadbalancer)
+		if lb.PendingDeleted {
+			return nil
+		}
+		return lb
 	}
 	return nil
 }
@@ -514,12 +553,26 @@ func (self *SElasticip) GetAssociateNatGateway() *SNatGateway {
 	return nil
 }
 
+func (self *SElasticip) GetAssociateResource() db.IModel {
+	if vm := self.GetAssociateVM(); vm != nil {
+		return vm
+	}
+	if lb := self.GetAssociateLoadbalancer(); lb != nil {
+		return lb
+	}
+	if nat := self.GetAssociateNatGateway(); nat != nil {
+		return nat
+	}
+	return nil
+}
+
 func (self *SElasticip) Dissociate(ctx context.Context, userCred mcclient.TokenCredential) error {
 	if len(self.AssociateType) == 0 {
 		return nil
 	}
 	var vm *SGuest
 	var nat *SNatGateway
+	var lb *SLoadbalancer
 	switch self.AssociateType {
 	case api.EIP_ASSOCIATE_TYPE_SERVER:
 		vm = self.GetAssociateVM()
@@ -530,6 +583,11 @@ func (self *SElasticip) Dissociate(ctx context.Context, userCred mcclient.TokenC
 		nat = self.GetAssociateNatGateway()
 		if nat == nil {
 			log.Errorf("dissociate Nat gateway not exists???")
+		}
+	case api.EIP_ASSOCIATE_TYPE_LOADBALANCER:
+		lb = self.GetAssociateLoadbalancer()
+		if lb == nil {
+			log.Errorf("dissociate loadbalancer not exists???")
 		}
 	}
 
@@ -553,9 +611,38 @@ func (self *SElasticip) Dissociate(ctx context.Context, userCred mcclient.TokenC
 		db.OpsLog.LogEvent(nat, db.ACT_EIP_DETACH, self.GetShortDesc(ctx), userCred)
 	}
 
+	if lb != nil {
+		db.OpsLog.LogDetachEvent(ctx, lb, self, userCred, self.GetShortDesc(ctx))
+		db.OpsLog.LogEvent(self, db.ACT_EIP_DETACH, lb.GetShortDesc(ctx), userCred)
+		db.OpsLog.LogEvent(lb, db.ACT_EIP_DETACH, self.GetShortDesc(ctx), userCred)
+	}
+
 	if self.Mode == api.EIP_MODE_INSTANCE_PUBLICIP {
 		self.Delete(ctx, userCred)
 	}
+	return nil
+}
+
+func (self *SElasticip) AssociateLoadbalancer(ctx context.Context, userCred mcclient.TokenCredential, lb *SLoadbalancer) error {
+	if lb.PendingDeleted {
+		return fmt.Errorf("loadbalancer is deleted")
+	}
+	if len(self.AssociateType) > 0 {
+		return fmt.Errorf("EIP has been associated!!")
+	}
+	_, err := db.Update(self, func() error {
+		self.AssociateType = api.EIP_ASSOCIATE_TYPE_LOADBALANCER
+		self.AssociateId = lb.Id
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	db.OpsLog.LogAttachEvent(ctx, lb, self, userCred, self.GetShortDesc(ctx))
+	db.OpsLog.LogEvent(self, db.ACT_EIP_ATTACH, lb.GetShortDesc(ctx), userCred)
+	db.OpsLog.LogEvent(lb, db.ACT_EIP_ATTACH, self.GetShortDesc(ctx), userCred)
+
 	return nil
 }
 
@@ -679,17 +766,19 @@ func (manager *SElasticipManager) ValidateCreateData(ctx context.Context, userCr
 
 func (self *SElasticip) PostCreate(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, data jsonutils.JSONObject) {
 	self.SVirtualResourceBase.PostCreate(ctx, userCred, ownerId, query, data)
-	params := jsonutils.NewDict()
-	if data.Contains("ip") {
-		ip, _ := data.GetString("ip")
-		params.Add(jsonutils.NewString(ip), "ip")
-	}
+
+	quotaPlatform := self.GetQuotaPlatformID()
 	eipPendingUsage := &SQuota{Eip: 1}
-	self.startEipAllocateTask(ctx, userCred, params, eipPendingUsage)
+	err := QuotaManager.CancelPendingUsage(ctx, userCred, rbacutils.ScopeProject, ownerId, quotaPlatform, eipPendingUsage, eipPendingUsage)
+	if err != nil {
+		log.Errorf("SElasticip CancelPendingUsage error: %s", err)
+	}
+
+	self.startEipAllocateTask(ctx, userCred, data.(*jsonutils.JSONDict))
 }
 
-func (self *SElasticip) startEipAllocateTask(ctx context.Context, userCred mcclient.TokenCredential, params *jsonutils.JSONDict, pendingUsage quotas.IQuota) error {
-	task, err := taskman.TaskManager.NewTask(ctx, "EipAllocateTask", self, userCred, params, "", "", pendingUsage)
+func (self *SElasticip) startEipAllocateTask(ctx context.Context, userCred mcclient.TokenCredential, params *jsonutils.JSONDict) error {
+	task, err := taskman.TaskManager.NewTask(ctx, "EipAllocateTask", self, userCred, params, "", "", nil)
 	if err != nil {
 		log.Errorf("newtask EipAllocateTask fail %s", err)
 		return err
@@ -714,7 +803,7 @@ func (self *SElasticip) CustomizeDelete(ctx context.Context, userCred mcclient.T
 
 func (self *SElasticip) ValidateDeleteCondition(ctx context.Context) error {
 	if self.IsAssociated() {
-		return fmt.Errorf("eip is associated with instance")
+		return fmt.Errorf("eip is associated with resources")
 	}
 	return self.SVirtualResourceBase.ValidateDeleteCondition(ctx)
 }
@@ -958,9 +1047,7 @@ func (self *SElasticip) getMoreDetails(extra *jsonutils.JSONDict) *jsonutils.JSO
 	return extra
 }
 
-func (manager *SElasticipManager) AllocateEipAndAssociateVM(ctx context.Context, userCred mcclient.TokenCredential, vm *SGuest, bw int, chargeType string, eipPendingUsage quotas.IQuota) error {
-
-	host := vm.GetHost()
+func (manager *SElasticipManager) NewEipForVMOnHost(ctx context.Context, userCred mcclient.TokenCredential, vm *SGuest, host *SHost, bw int, chargeType string, pendingUsage quotas.IQuota) (*SElasticip, error) {
 	region := host.GetRegion()
 
 	if len(chargeType) == 0 {
@@ -985,9 +1072,16 @@ func (manager *SElasticipManager) AllocateEipAndAssociateVM(ctx context.Context,
 	err := manager.TableSpec().Insert(&eip)
 	if err != nil {
 		log.Errorf("create EIP record fail %s", err)
-		return err
+		return nil, err
 	}
 
+	eipPendingUsage := &SQuota{Eip: 1}
+	QuotaManager.CancelPendingUsage(ctx, userCred, rbacutils.ScopeProject, vm.GetOwnerId(), vm.GetQuotaPlatformID(), pendingUsage, eipPendingUsage)
+
+	return &eip, nil
+}
+
+func (eip *SElasticip) AllocateAndAssociateVM(ctx context.Context, userCred mcclient.TokenCredential, vm *SGuest) error {
 	params := jsonutils.NewDict()
 	params.Add(jsonutils.NewString(vm.ExternalId), "instance_external_id")
 	params.Add(jsonutils.NewString(vm.Id), "instance_id")
@@ -995,7 +1089,7 @@ func (manager *SElasticipManager) AllocateEipAndAssociateVM(ctx context.Context,
 
 	vm.SetStatus(userCred, api.VM_ASSOCIATE_EIP, "allocate and associate EIP")
 
-	return eip.startEipAllocateTask(ctx, userCred, params, eipPendingUsage)
+	return eip.startEipAllocateTask(ctx, userCred, params)
 }
 
 func (self *SElasticip) AllowPerformChangeBandwidth(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data jsonutils.JSONObject) bool {

@@ -499,6 +499,19 @@ func (h *SHostInfo) detectiveOvsVersion() {
 	}
 }
 
+func (h *SHostInfo) GetMasterNicIpAndMask() (string, int) {
+	if h.MasterNic != nil {
+		mask, _ := h.MasterNic.Mask.Size()
+		return h.MasterNic.Addr, mask
+	}
+	for _, n := range h.Nics {
+		if len(n.Ip) > 0 {
+			return n.Ip, n.Mask
+		}
+	}
+	return "", 0
+}
+
 func (h *SHostInfo) GetMasterIp() string {
 	if h.MasterNic != nil {
 		return h.MasterNic.Addr
@@ -562,27 +575,76 @@ func (h *SHostInfo) onFail() {
 	panic("register failed, try 30 seconds later...")
 }
 
+// try to create network on region.
+func (h *SHostInfo) tryCreateNetworkOnWire() {
+	masterIp, mask := h.GetMasterNicIpAndMask()
+	log.Debugf("Get master ip %s and mask %d", masterIp, mask)
+	if len(masterIp) == 0 || mask == 0 {
+		return
+	}
+	params := jsonutils.NewDict()
+	params.Set("ip", jsonutils.NewString(masterIp))
+	params.Set("mask", jsonutils.NewInt(int64(mask)))
+	params.Set("is_on_premise", jsonutils.JSONTrue)
+	params.Set("server_type", jsonutils.NewString(api.NETWORK_TYPE_BAREMETAL))
+	ret, err := modules.Networks.PerformClassAction(
+		hostutils.GetComputeSession(context.Background()),
+		"try-create-network", params)
+	if err != nil {
+		log.Errorf("try create network get error %s", err)
+		h.onFail()
+	}
+	if !jsonutils.QueryBoolean(ret, "find_matched", false) {
+		log.Errorf("Fail to get network info: no networks")
+		h.onFail()
+	}
+	wireId, err := ret.GetString("wire_id")
+	if err != nil {
+		log.Errorf("Fail to get network info: no wire id")
+		h.onFail()
+	}
+	h.onGetWireId(wireId)
+}
+
 func (h *SHostInfo) fetchAccessNetworkInfo() {
 	masterIp := h.GetMasterIp()
 	if len(masterIp) == 0 {
 		panic("master ip not found")
 	}
+	log.Debugf("Master ip %s to fetch wire", masterIp)
 	params := jsonutils.NewDict()
 	params.Set("ip", jsonutils.NewString(masterIp))
 	params.Set("is_on_premise", jsonutils.JSONTrue)
 	params.Set("limit", jsonutils.NewInt(0))
-	wire, err := hostutils.GetWireOfIp(context.Background(), params)
+
+	res, err := modules.Networks.List(h.GetSession(), params)
+	if err != nil {
+		log.Errorln(err)
+		h.onFail()
+	}
+	if len(res.Data) == 0 {
+		h.tryCreateNetworkOnWire()
+	} else if len(res.Data) == 1 {
+		wireId, _ := res.Data[0].GetString("wire_id")
+		h.onGetWireId(wireId)
+	} else {
+		log.Errorf("Fail to get network info: no networks")
+		h.onFail()
+	}
+}
+
+func (h *SHostInfo) onGetWireId(wireId string) {
+	wire, err := hostutils.GetWireInfo(context.Background(), wireId)
+	if err != nil {
+		log.Errorln(err)
+		h.onFail()
+	}
+	h.ZoneId, err = wire.GetString("zone_id")
 	if err != nil {
 		log.Errorln(err)
 		h.onFail()
 	} else {
-		h.ZoneId, err = wire.GetString("zone_id")
-		if err != nil {
-			log.Errorln(err)
-			h.onFail()
-		} else {
-			h.getZoneInfo(h.ZoneId, false)
-		}
+		h.getZoneInfo(h.ZoneId, false)
 	}
 }
 
@@ -591,6 +653,7 @@ func (h *SHostInfo) GetSession() *mcclient.ClientSession {
 }
 
 func (h *SHostInfo) getZoneInfo(zoneId string, standalone bool) {
+	log.Debugf("Start GetZoneInfo %s %v", zoneId, standalone)
 	var params = jsonutils.NewDict()
 	params.Set("standalone", jsonutils.NewBool(standalone))
 	res, err := modules.Zones.Get(h.GetSession(),
@@ -692,7 +755,11 @@ func (h *SHostInfo) updateHostRecord(hostId string) {
 	content.Set("manager_uri", jsonutils.NewString(fmt.Sprintf("%s://%s:%d",
 		schema, masterIp, options.HostOptions.Port)))
 	content.Set("cpu_count", jsonutils.NewInt(int64(h.Cpu.cpuInfoProc.Count)))
-	content.Set("node_count", jsonutils.NewInt(int64(h.Cpu.cpuInfoDmi.Nodes)))
+	if sysutils.IsHypervisor() {
+		content.Set("node_count", jsonutils.NewInt(1))
+	} else {
+		content.Set("node_count", jsonutils.NewInt(int64(h.Cpu.cpuInfoDmi.Nodes)))
+	}
 	content.Set("cpu_desc", jsonutils.NewString(h.Cpu.cpuInfoProc.Model))
 	content.Set("cpu_microcode", jsonutils.NewString(h.Cpu.cpuInfoProc.Microcode))
 	content.Set("cpu_mhz", jsonutils.NewInt(int64(h.Cpu.cpuInfoProc.Freq)))
@@ -1256,6 +1323,10 @@ func (h *SHostInfo) OnCatalogChanged(catalog mcclient.KeystoneServiceCatalogV3) 
 	}
 	conf["nics"] = h.getNicsTelegrafConf()
 	urls, _ := catalog.GetServiceURLs("kafka", options.HostOptions.Region, "", "internalURL")
+	if len(urls) > 0 {
+		conf["kafka"] = map[string]interface{}{"brokers": urls, "topic": "telegraf"}
+	}
+	urls, _ = catalog.GetServiceURLs("influxdb", options.HostOptions.Region, "", "internalURL")
 	if len(urls) > 0 {
 		conf["influxdb"] = map[string]interface{}{"url": urls, "database": "telegraf"}
 	}

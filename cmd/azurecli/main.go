@@ -18,11 +18,10 @@ import (
 	"fmt"
 	"os"
 
-	"yunion.io/x/log"
 	"yunion.io/x/structarg"
 
-	"yunion.io/x/onecloud/pkg/util/azure"
-	_ "yunion.io/x/onecloud/pkg/util/azure/shell"
+	"yunion.io/x/onecloud/pkg/multicloud/azure"
+	_ "yunion.io/x/onecloud/pkg/multicloud/azure/shell"
 	"yunion.io/x/onecloud/pkg/util/printutils"
 	"yunion.io/x/onecloud/pkg/util/shellutils"
 )
@@ -75,7 +74,8 @@ func getSubcommandParser() (*structarg.ArgumentParser, error) {
 }
 
 func showErrorAndExit(e error) {
-	log.Errorf("%s", e)
+	fmt.Fprintf(os.Stderr, "%s", e)
+	fmt.Fprintln(os.Stderr)
 	os.Exit(1)
 }
 

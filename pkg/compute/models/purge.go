@@ -295,6 +295,11 @@ func (lb *SLoadbalancer) purge(ctx context.Context, userCred mcclient.TokenCrede
 		return err
 	}
 
+	err = lb.DeleteEip(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
 	err = lb.purgeBackendGroups(ctx, userCred)
 	if err != nil {
 		return err
@@ -657,6 +662,54 @@ func (net *SNetwork) purgeReservedIps(ctx context.Context, userCred mcclient.Tok
 	return nil
 }
 
+func (nic *SNetworkInterface) purgeNetworkAddres(ctx context.Context, userCred mcclient.TokenCredential) error {
+	networks, err := nic.GetNetworks()
+	if err != nil {
+		return err
+	}
+
+	for i := range networks {
+		err := networks[i].Delete(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (nic *SNetworkInterface) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, nic)
+	defer lockman.ReleaseObject(ctx, nic)
+
+	err := nic.purgeNetworkAddres(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = nic.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return nic.Delete(ctx, userCred)
+}
+
+func (net *SNetwork) purgeNetworkInterfaces(ctx context.Context, userCred mcclient.TokenCredential) error {
+	networkinterfaceIds := NetworkinterfacenetworkManager.Query("networkinterface_id").Equals("network_id", net.Id).Distinct().SubQuery()
+	q := NetworkInterfaceManager.Query().In("id", networkinterfaceIds)
+	interfaces := make([]SNetworkInterface, 0)
+	err := db.FetchModelObjects(NetworkInterfaceManager, q, &interfaces)
+	if err != nil {
+		return err
+	}
+	for i := range interfaces {
+		err = interfaces[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (net *SNetwork) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
 	lockman.LockObject(ctx, net)
 	defer lockman.ReleaseObject(ctx, net)
@@ -682,6 +735,11 @@ func (net *SNetwork) purge(ctx context.Context, userCred mcclient.TokenCredentia
 		return err
 	}
 	err = net.purgeReservedIps(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = net.purgeNetworkInterfaces(ctx, userCred)
 	if err != nil {
 		return err
 	}
@@ -878,7 +936,7 @@ func (manager *SCloudregionManager) purgeAll(ctx context.Context, userCred mccli
 	return nil
 }
 
-func (table *SNatSTable) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+func (table *SNatSEntry) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
 	lockman.LockObject(ctx, table)
 	defer lockman.ReleaseObject(ctx, table)
 
@@ -905,7 +963,7 @@ func (nat *SNatGateway) purgeSTables(ctx context.Context, userCred mcclient.Toke
 	return nil
 }
 
-func (table *SNatDTable) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+func (table *SNatDEntry) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
 	lockman.LockObject(ctx, table)
 	defer lockman.ReleaseObject(ctx, table)
 
@@ -961,6 +1019,245 @@ func (manager *SNatGetewayManager) purgeAll(ctx context.Context, userCred mcclie
 	}
 	for i := range nats {
 		err = nats[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (manager *SNetworkInterfaceManager) purgeAll(ctx context.Context, userCred mcclient.TokenCredential, providerId string) error {
+	nics, err := manager.getNetworkInterfacesByProviderId(providerId)
+	if err != nil {
+		return err
+	}
+	for i := range nics {
+		err = nics[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (bucket *SBucket) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, bucket)
+	defer lockman.ReleaseObject(ctx, bucket)
+
+	err := bucket.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return bucket.RealDelete(ctx, userCred)
+}
+
+func (bucketManager *SBucketManager) purgeAll(ctx context.Context, userCred mcclient.TokenCredential, providerId string) error {
+	buckets := make([]SBucket, 0)
+	err := fetchByManagerId(bucketManager, providerId, &buckets)
+	if err != nil {
+		return err
+	}
+	for i := range buckets {
+		err := buckets[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (privilege *SDBInstancePrivilege) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, privilege)
+	defer lockman.ReleaseObject(ctx, privilege)
+
+	err := privilege.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return privilege.Delete(ctx, userCred)
+}
+
+func (account *SDBInstanceAccount) purgePrivileges(ctx context.Context, userCred mcclient.TokenCredential) error {
+	privileges, err := account.GetDBInstancePrivileges()
+	if err != nil {
+		return err
+	}
+
+	for i := range privileges {
+		err = privileges[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (account *SDBInstanceAccount) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, account)
+	defer lockman.ReleaseObject(ctx, account)
+
+	err := account.purgePrivileges(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = account.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return account.Delete(ctx, userCred)
+}
+
+func (instance *SDBInstance) purgeAccounts(ctx context.Context, userCred mcclient.TokenCredential) error {
+	accounts, err := instance.GetDBInstanceAccounts()
+	if err != nil {
+		return err
+	}
+
+	for i := range accounts {
+		err = accounts[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (database *SDBInstanceDatabase) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, database)
+	defer lockman.ReleaseObject(ctx, database)
+
+	err := database.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return database.Delete(ctx, userCred)
+}
+
+func (instance *SDBInstance) purgeDatabases(ctx context.Context, userCred mcclient.TokenCredential) error {
+	databases, err := instance.GetDBDatabases()
+	if err != nil {
+		return err
+	}
+
+	for i := range databases {
+		err = databases[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (parameter *SDBInstanceParameter) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, parameter)
+	defer lockman.ReleaseObject(ctx, parameter)
+
+	err := parameter.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return parameter.Delete(ctx, userCred)
+}
+
+func (instance *SDBInstance) purgeParameters(ctx context.Context, userCred mcclient.TokenCredential) error {
+	parameters, err := instance.GetDBParameters()
+	if err != nil {
+		return err
+	}
+
+	for i := range parameters {
+		err = parameters[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (network *SDBInstanceNetwork) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, network)
+	defer lockman.ReleaseObject(ctx, network)
+
+	err := network.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return network.Delete(ctx, userCred)
+}
+
+func (instance *SDBInstance) purgeNetwork(ctx context.Context, userCred mcclient.TokenCredential) error {
+	network, _ := instance.GetDBNetwork()
+	if network != nil {
+		return network.purge(ctx, userCred)
+	}
+	return nil
+}
+
+func (instance *SDBInstance) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, instance)
+	defer lockman.ReleaseObject(ctx, instance)
+
+	err := instance.purgeAccounts(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = instance.purgeDatabases(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = instance.purgeParameters(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = instance.purgeNetwork(ctx, userCred)
+	if err != nil {
+		return err
+	}
+
+	err = instance.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+
+	return instance.Delete(ctx, userCred)
+}
+
+func (manager *SDBInstanceManager) purgeAll(ctx context.Context, userCred mcclient.TokenCredential, providerId string) error {
+	instances, err := manager.getDBInstancesByProviderId(providerId)
+	if err != nil {
+		return err
+	}
+	for i := range instances {
+		err = instances[i].purge(ctx, userCred)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (backup *SDBInstanceBackup) purge(ctx context.Context, userCred mcclient.TokenCredential) error {
+	lockman.LockObject(ctx, backup)
+	defer lockman.ReleaseObject(ctx, backup)
+
+	err := backup.ValidateDeleteCondition(ctx)
+	if err != nil {
+		return err
+	}
+	return backup.Delete(ctx, userCred)
+}
+
+func (manager *SDBInstanceBackupManager) purgeAll(ctx context.Context, userCred mcclient.TokenCredential, providerId string) error {
+	backups, err := manager.getDBInstanceBackupsByProviderId(providerId)
+	if err != nil {
+		return err
+	}
+	for i := range backups {
+		err = backups[i].purge(ctx, userCred)
 		if err != nil {
 			return err
 		}

@@ -25,10 +25,11 @@ import (
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/gotypes"
 	"yunion.io/x/pkg/tristate"
 	"yunion.io/x/pkg/util/compare"
-	"yunion.io/x/pkg/util/errors"
+	errors_aggr "yunion.io/x/pkg/util/errors"
 	"yunion.io/x/pkg/util/netutils"
 	"yunion.io/x/pkg/util/osprofile"
 	"yunion.io/x/pkg/util/regutils"
@@ -42,12 +43,10 @@ import (
 	imageapi "yunion.io/x/onecloud/pkg/apis/image"
 	schedapi "yunion.io/x/onecloud/pkg/apis/scheduler"
 	"yunion.io/x/onecloud/pkg/cloudcommon/cmdline"
-	"yunion.io/x/onecloud/pkg/cloudcommon/consts"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/lockman"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/quotas"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
-	"yunion.io/x/onecloud/pkg/cloudcommon/policy"
 	"yunion.io/x/onecloud/pkg/cloudcommon/userdata"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 	"yunion.io/x/onecloud/pkg/compute/options"
@@ -62,140 +61,6 @@ import (
 	"yunion.io/x/onecloud/pkg/util/seclib2"
 	"yunion.io/x/onecloud/pkg/util/stringutils2"
 )
-
-/*
-const (
-	VM_INIT            = api.VM_INIT
-	VM_UNKNOWN         = api.VM_UNKNOWN
-	VM_SCHEDULE        = api.VM_SCHEDULE
-	VM_SCHEDULE_FAILED = api.VM_SCHEDULE_FAILED
-	VM_CREATE_NETWORK  = api.VM_CREATE_NETWORK
-	VM_NETWORK_FAILED  = api.VM_NETWORK_FAILED
-	VM_DEVICE_FAILED   = api.VM_DEVICE_FAILED
-	VM_CREATE_FAILED   = api.VM_CREATE_FAILED
-	VM_CREATE_DISK     = api.VM_CREATE_DISK
-	VM_DISK_FAILED     = api.VM_DISK_FAILED
-	VM_START_DEPLOY    = api.VM_START_DEPLOY
-	VM_DEPLOYING       = api.VM_DEPLOYING
-	VM_DEPLOY_FAILED   = api.VM_DEPLOY_FAILED
-	VM_READY           = api.VM_READY
-	VM_START_START     = api.VM_START_START
-	VM_STARTING        = api.VM_STARTING
-	VM_START_FAILED    = api.VM_START_FAILED // # = ready
-	VM_RUNNING         = api.VM_RUNNING
-	VM_START_STOP      = api.VM_START_STOP
-	VM_STOPPING        = api.VM_STOPPING
-	VM_STOP_FAILED     = api.VM_STOP_FAILED // # = running
-	VM_RENEWING        = api.VM_RENEWING
-	VM_RENEW_FAILED    = api.VM_RENEW_FAILED
-
-	VM_BACKUP_STARTING         = api.VM_BACKUP_STARTING
-	VM_BACKUP_CREATING         = api.VM_BACKUP_CREATING
-	VM_BACKUP_CREATE_FAILED    = api.VM_BACKUP_CREATE_FAILED
-	VM_DEPLOYING_BACKUP        = api.VM_DEPLOYING_BACKUP
-	VM_DEPLOYING_BACKUP_FAILED = api.VM_DEPLOYING_BACKUP_FAILED
-	VM_DELETING_BACKUP         = api.VM_DELETING_BACKUP
-	VM_BACKUP_DELETE_FAILED    = api.VM_BACKUP_DELETE_FAILED
-	VM_SWITCH_TO_BACKUP        = api.VM_SWITCH_TO_BACKUP
-	VM_SWITCH_TO_BACKUP_FAILED = api.VM_SWITCH_TO_BACKUP_FAILED
-
-	VM_ATTACH_DISK_FAILED = api.VM_ATTACH_DISK_FAILED
-	VM_DETACH_DISK_FAILED = api.VM_DETACH_DISK_FAILED
-
-	VM_START_SUSPEND  = api.VM_START_SUSPEND
-	VM_SUSPENDING     = api.VM_SUSPENDING
-	VM_SUSPEND        = api.VM_SUSPEND
-	VM_SUSPEND_FAILED = api.VM_SUSPEND_FAILED
-
-	VM_START_DELETE = api.VM_START_DELETE
-	VM_DELETE_FAIL  = api.VM_DELETE_FAIL
-	VM_DELETING     = api.VM_DELETING
-
-	VM_DEALLOCATED = api.VM_DEALLOCATED
-
-	VM_START_MIGRATE  = api.VM_START_MIGRATE
-	VM_MIGRATING      = api.VM_MIGRATING
-	VM_MIGRATE_FAILED = api.VM_MIGRATE_FAILED
-
-	VM_CHANGE_FLAVOR      = api.VM_CHANGE_FLAVOR
-	VM_CHANGE_FLAVOR_FAIL = api.VM_CHANGE_FLAVOR_FAIL
-	VM_REBUILD_ROOT       = api.VM_REBUILD_ROOT
-	VM_REBUILD_ROOT_FAIL  = api.VM_REBUILD_ROOT_FAIL
-
-	VM_START_SNAPSHOT  = api.VM_START_SNAPSHOT
-	VM_SNAPSHOT        = api.VM_SNAPSHOT
-	VM_SNAPSHOT_DELETE = api.VM_SNAPSHOT_DELETE
-	VM_BLOCK_STREAM    = api.VM_BLOCK_STREAM
-	VM_MIRROR_FAIL     = api.VM_MIRROR_FAIL
-	VM_SNAPSHOT_SUCC   = api.VM_SNAPSHOT_SUCC
-	VM_SNAPSHOT_FAILED = api.VM_SNAPSHOT_FAILED
-
-	VM_SYNCING_STATUS = api.VM_SYNCING_STATUS
-	VM_SYNC_CONFIG    = api.VM_SYNC_CONFIG
-	VM_SYNC_FAIL      = api.VM_SYNC_FAIL
-
-	VM_RESIZE_DISK        = api.VM_RESIZE_DISK
-	VM_RESIZE_DISK_FAILED = api.VM_RESIZE_DISK_FAILED
-	VM_START_SAVE_DISK    = api.VM_START_SAVE_DISK
-	VM_SAVE_DISK          = api.VM_SAVE_DISK
-	VM_SAVE_DISK_FAILED   = api.VM_SAVE_DISK_FAILED
-
-	VM_RESTORING_SNAPSHOT = api.VM_RESTORING_SNAPSHOT
-	VM_RESTORE_DISK       = api.VM_RESTORE_DISK
-	VM_RESTORE_STATE      = api.VM_RESTORE_STATE
-	VM_RESTORE_FAILED     = api.VM_RESTORE_FAILED
-
-	VM_ASSOCIATE_EIP         = api.VM_ASSOCIATE_EIP
-	VM_ASSOCIATE_EIP_FAILED  = api.VM_ASSOCIATE_EIP_FAILED
-	VM_DISSOCIATE_EIP        = api.VM_DISSOCIATE_EIP
-	VM_DISSOCIATE_EIP_FAILED = api.VM_DISSOCIATE_EIP_FAILED
-
-	VM_REMOVE_STATEFILE = api.VM_REMOVE_STATEFILE
-
-	VM_ADMIN = api.VM_ADMIN
-
-	SHUTDOWN_STOP      = api.SHUTDOWN_STOP
-	SHUTDOWN_TERMINATE = api.SHUTDOWN_TERMINATE
-
-	HYPERVISOR_KVM       = api.HYPERVISOR_KVM
-	HYPERVISOR_CONTAINER = api.HYPERVISOR_CONTAINER
-	HYPERVISOR_BAREMETAL = api.HYPERVISOR_BAREMETAL
-	HYPERVISOR_ESXI      = api.HYPERVISOR_ESXI
-	HYPERVISOR_HYPERV    = api.HYPERVISOR_HYPERV
-	HYPERVISOR_XEN       = api.HYPERVISOR_XEN
-
-	HYPERVISOR_ALIYUN    = api.HYPERVISOR_ALIYUN
-	HYPERVISOR_QCLOUD    = api.HYPERVISOR_QCLOUD
-	HYPERVISOR_AZURE     = api.HYPERVISOR_AZURE
-	HYPERVISOR_AWS       = api.HYPERVISOR_AWS
-	HYPERVISOR_HUAWEI    = api.HYPERVISOR_HUAWEI
-	HYPERVISOR_OPENSTACK = api.HYPERVISOR_OPENSTACK
-	HYPERVISOR_UCLOUD    = api.HYPERVISOR_UCLOUD
-
-	//	HYPERVISOR_DEFAULT = HYPERVISOR_KVM
-	HYPERVISOR_DEFAULT = HYPERVISOR_KVM
-)
-
-const (
-	VM_AWS_DEFAULT_LOGIN_USER = "ec2user"
-
-	VM_METADATA_APP_TAGS            = "app_tags"
-	VM_METADATA_CREATE_PARAMS       = "create_params"
-)
-
-var VM_RUNNING_STATUS = api.VM_RUNNING_STATUS
-var VM_CREATING_STATUS = api.VM_CREATING_STATUS
-
-var HYPERVISORS = api.HYPERVISORS
-
-var PUBLIC_CLOUD_HYPERVISORS = api.PUBLIC_CLOUD_HYPERVISORS
-
-// var HYPERVISORS = []string{HYPERVISOR_ALIYUN}
-
-var HYPERVISOR_HOSTTYPE = api.HYPERVISOR_HOSTTYPE
-
-var HOSTTYPE_HYPERVISOR = api.HOSTTYPE_HYPERVISOR
-*/
 
 type SGuestManager struct {
 	db.SVirtualResourceBaseManager
@@ -588,6 +453,45 @@ func (manager *SGuestManager) ExtraSearchConditions(ctx context.Context, q *sqlc
 	return nil
 }
 
+func (manager *SGuestManager) OrderByExtraFields(ctx context.Context, q *sqlchemy.SQuery, userCred mcclient.TokenCredential, query jsonutils.JSONObject) (*sqlchemy.SQuery, error) {
+	q, err := manager.SVirtualResourceBaseManager.OrderByExtraFields(ctx, q, userCred, query)
+	if err != nil {
+		return nil, err
+	}
+	orderByAccount, _ := query.GetString("order_by_account")
+	if sqlchemy.SQL_ORDER_ASC.Equals(orderByAccount) || sqlchemy.SQL_ORDER_DESC.Equals(orderByAccount) {
+		hosts := HostManager.Query().SubQuery()
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query().SubQuery()
+		q = q.Join(hosts, sqlchemy.Equals(q.Field("host_id"), hosts.Field("id")))
+		q = q.Join(cloudproviders, sqlchemy.Equals(hosts.Field("manager_id"), cloudproviders.Field("id")))
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
+		if sqlchemy.SQL_ORDER_ASC.Equals(orderByAccount) {
+			q = q.Asc(cloudaccounts.Field("name"))
+		} else {
+			q = q.Desc(cloudaccounts.Field("name"))
+		}
+	}
+	return q, nil
+}
+
+func (manager *SGuestManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error) {
+	switch field {
+	case "account":
+		hosts := HostManager.Query().SubQuery()
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query().SubQuery()
+		q = q.Join(hosts, sqlchemy.Equals(q.Field("host_id"), hosts.Field("id")))
+		q = q.Join(cloudproviders, sqlchemy.Equals(hosts.Field("manager_id"), cloudproviders.Field("id")))
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
+		q.GroupBy(cloudaccounts.Field("name"))
+		q.AppendField(cloudaccounts.Field("name", "account"))
+	default:
+		return nil, httperrors.NewBadRequestError("unsupport field %s", field)
+	}
+	return q, nil
+}
+
 func (guest *SGuest) GetHypervisor() string {
 	if len(guest.Hypervisor) == 0 {
 		return api.HYPERVISOR_DEFAULT
@@ -632,6 +536,31 @@ func (guest *SGuest) GetDisksQuery() *sqlchemy.SQuery {
 
 func (guest *SGuest) DiskCount() (int, error) {
 	return guest.GetDisksQuery().CountWithError()
+}
+
+func (guest *SGuest) GetSystemDisk() (*SDisk, error) {
+	q := DiskManager.Query().Equals("disk_type", api.DISK_TYPE_SYS)
+	gs := GuestdiskManager.Query().SubQuery()
+	q = q.Join(gs, sqlchemy.Equals(gs.Field("disk_id"), q.Field("id"))).
+		Filter(sqlchemy.Equals(gs.Field("guest_id"), guest.Id))
+
+	count, err := q.CountWithError()
+	if err != nil {
+		return nil, err
+	}
+	if count > 1 {
+		return nil, sqlchemy.ErrDuplicateEntry
+	}
+	if count == 0 {
+		return nil, sql.ErrNoRows
+	}
+	disk := &SDisk{}
+	err = q.First(disk)
+	if err != nil {
+		return nil, errors.Wrap(err, "q.First(disk)")
+	}
+	disk.SetModelManager(DiskManager, disk)
+	return disk, nil
 }
 
 func (guest *SGuest) GetDisks() []SGuestdisk {
@@ -1063,9 +992,9 @@ func (manager *SGuestManager) ValidateCreateData(ctx context.Context, userCred m
 
 		if len(input.Duration) > 0 {
 
-			if !userCred.IsAllow(rbacutils.ScopeSystem, consts.GetServiceType(), manager.KeywordPlural(), policy.PolicyActionPerform, "renew") {
+			/*if !userCred.IsAllow(rbacutils.ScopeSystem, consts.GetServiceType(), manager.KeywordPlural(), policy.PolicyActionPerform, "renew") {
 				return nil, httperrors.NewForbiddenError("only admin can create prepaid resource")
-			}
+			}*/
 
 			if input.ResourceType == api.HostResourceTypePrepaidRecycle {
 				return nil, httperrors.NewConflictError("cannot create prepaid server on prepaid resource type")
@@ -1424,6 +1353,12 @@ func (self *SGuest) GetCustomizeColumns(ctx context.Context, userCred mcclient.T
 func (self *SGuest) moreExtraInfo(extra *jsonutils.JSONDict, fields stringutils2.SSortedStrings) *jsonutils.JSONDict {
 	// extra.Add(jsonutils.NewInt(int64(self.getExtBandwidth())), "ext_bw")
 
+	if self.IsPrepaidRecycle() {
+		extra.Add(jsonutils.JSONTrue, "is_prepaid_recycle")
+	} else {
+		extra.Add(jsonutils.JSONFalse, "is_prepaid_recycle")
+	}
+
 	if len(self.BackupHostId) > 0 && (len(fields) == 0 || fields.Contains("backup_host_name") || fields.Contains("backup_host_status")) {
 		backupHost := HostManager.FetchHostById(self.BackupHostId)
 		if len(fields) == 0 || fields.Contains("backup_host_name") {
@@ -1505,12 +1440,6 @@ func (self *SGuest) GetExtraDetails(ctx context.Context, userCred mcclient.Token
 		extra.Add(jsonutils.NewString(self.getAdminSecurityRules()), "admin_security_rules")
 	}
 
-	if self.IsPrepaidRecycle() {
-		extra.Add(jsonutils.JSONTrue, "is_prepaid_recycle")
-	} else {
-		extra.Add(jsonutils.JSONFalse, "is_prepaid_recycle")
-	}
-
 	return self.moreExtraInfo(extra, nil), nil
 }
 
@@ -1558,6 +1487,16 @@ func (manager *SGuestManager) ListItemExportKeys(ctx context.Context, q *sqlchem
 		q.AppendField(hostSubQuery.Field("name", "host"))
 	}
 
+	if utils.IsInStringArray("zone", keys) {
+		zoneQuery := ZoneManager.Query("id", "name").SubQuery()
+		hostQuery := HostManager.Query("id", "zone_id").GroupBy("id")
+		hostQuery.LeftJoin(zoneQuery, sqlchemy.Equals(hostQuery.Field("zone_id"), zoneQuery.Field("id")))
+		hostQuery.AppendField(zoneQuery.Field("name", "zone"))
+		hostSubQuery := hostQuery.SubQuery()
+		q.LeftJoin(hostSubQuery, sqlchemy.Equals(q.Field("host_id"), hostSubQuery.Field("id")))
+		q.AppendField(hostSubQuery.Field("zone"))
+	}
+
 	// host_id as filter key
 	if utils.IsInStringArray("region", keys) {
 		zoneQuery := ZoneManager.Query("id", "cloudregion_id").SubQuery()
@@ -1599,6 +1538,9 @@ func (manager *SGuestManager) GetExportExtraKeys(ctx context.Context, query json
 	}
 	if host, ok := rowMap["host"]; ok && len(host) > 0 {
 		res.Set("host", jsonutils.NewString(host))
+	}
+	if zone, ok := rowMap["zone"]; ok && len(zone) > 0 {
+		res.Set("zone", jsonutils.NewString(zone))
 	}
 	if region, ok := rowMap["region"]; ok && len(region) > 0 {
 		res.Set("region", jsonutils.NewString(region))
@@ -2231,7 +2173,7 @@ func (self *SGuest) Attach2Network(ctx context.Context, userCred mcclient.TokenC
 	firstNic, err := self.attach2NetworkOnce(ctx, userCred, network, pendingUsage, address, driver, bwLimit, virtual,
 		reserved, allocDir, requireDesignatedIP, nicConfs[0], "")
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "self.attach2NetworkOnce")
 	}
 	retNics := []SGuestnetwork{*firstNic}
 	if len(nicConfs) > 1 {
@@ -2243,7 +2185,7 @@ func (self *SGuest) Attach2Network(ctx context.Context, userCred mcclient.TokenC
 			gn, err := self.attach2NetworkOnce(ctx, userCred, network, pendingUsage, "", firstNic.Driver, 0, true,
 				false, allocDir, false, nicConfs[i], firstNic.MacAddr)
 			if err != nil {
-				return retNics, err
+				return retNics, errors.Wrap(err, "self.attach2NetworkOnce")
 			}
 			retNics = append(retNics, *gn)
 		}
@@ -2277,7 +2219,7 @@ func (self *SGuest) attach2NetworkOnce(ctx context.Context, userCred mcclient.To
 		nicConf.Index, address, nicConf.Mac, driver, bwLimit, virtual, reserved,
 		allocDir, requireDesignatedIP, nicConf.Ifname, teamWithMac)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "GuestnetworkManager.newGuestNetwork")
 	}
 	network.updateDnsRecord(guestnic, true)
 	network.updateGuestNetmap(guestnic)
@@ -2310,21 +2252,26 @@ type sRemoveGuestnic struct {
 }
 
 type sAddGuestnic struct {
+	index   int
 	nic     cloudprovider.ICloudNic
 	net     *SNetwork
 	reserve bool
 }
 
-func getCloudNicNetwork(vnic cloudprovider.ICloudNic, host *SHost) (*SNetwork, error) {
+func getCloudNicNetwork(vnic cloudprovider.ICloudNic, host *SHost, ipList []string, index int) (*SNetwork, error) {
 	vnet := vnic.GetINetwork()
 	if vnet == nil {
 		ip := vnic.GetIP()
 		if len(ip) == 0 {
-			return nil, fmt.Errorf("Cannot find inetwork for vnics %s %s", vnic.GetMAC(), vnic.GetIP())
-		} else {
-			// find network by IP
-			return host.getNetworkOfIPOnHost(ip)
+			if index < len(ipList) {
+				ip = ipList[index]
+			}
+			if len(ip) == 0 {
+				return nil, fmt.Errorf("Cannot find inetwork for vnics %s: no ip", vnic.GetMAC())
+			}
 		}
+		// find network by IP
+		return host.getNetworkOfIPOnHost(ip)
 	}
 	localNetObj, err := db.FetchByExternalId(NetworkManager, vnet.GetGlobalId())
 	if err != nil {
@@ -2334,7 +2281,7 @@ func getCloudNicNetwork(vnic cloudprovider.ICloudNic, host *SHost) (*SNetwork, e
 	return localNet, nil
 }
 
-func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCredential, host *SHost, vnics []cloudprovider.ICloudNic) compare.SyncResult {
+func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCredential, host *SHost, vnics []cloudprovider.ICloudNic, ipList []string) compare.SyncResult {
 	result := compare.SyncResult{}
 
 	guestnics, err := self.GetNetworks("")
@@ -2348,7 +2295,7 @@ func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCrede
 
 	for i := 0; i < len(guestnics) || i < len(vnics); i += 1 {
 		if i < len(guestnics) && i < len(vnics) {
-			localNet, err := getCloudNicNetwork(vnics[i], host)
+			localNet, err := getCloudNicNetwork(vnics[i], host, ipList, i)
 			if err != nil {
 				log.Errorf("%s", err)
 				result.Error(err)
@@ -2361,7 +2308,7 @@ func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCrede
 					} else if len(vnics[i].GetIP()) > 0 {
 						// ip changed
 						removed = append(removed, sRemoveGuestnic{nic: &guestnics[i]})
-						adds = append(adds, sAddGuestnic{nic: vnics[i], net: localNet})
+						adds = append(adds, sAddGuestnic{index: i, nic: vnics[i], net: localNet})
 					} else {
 						// do nothing
 						// vm maybe turned off, ignore the case
@@ -2373,20 +2320,20 @@ func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCrede
 						reserve = true
 					}
 					removed = append(removed, sRemoveGuestnic{nic: &guestnics[i], reserve: reserve})
-					adds = append(adds, sAddGuestnic{nic: vnics[i], net: localNet, reserve: reserve})
+					adds = append(adds, sAddGuestnic{index: i, nic: vnics[i], net: localNet, reserve: reserve})
 				}
 			} else {
 				removed = append(removed, sRemoveGuestnic{nic: &guestnics[i]})
-				adds = append(adds, sAddGuestnic{nic: vnics[i], net: localNet})
+				adds = append(adds, sAddGuestnic{index: i, nic: vnics[i], net: localNet})
 			}
 		} else if i < len(guestnics) {
 			removed = append(removed, sRemoveGuestnic{nic: &guestnics[i]})
 		} else if i < len(vnics) {
-			localNet, err := getCloudNicNetwork(vnics[i], host)
+			localNet, err := getCloudNicNetwork(vnics[i], host, ipList, i)
 			if err != nil {
 				log.Errorf("%s", err) // ignore this case
 			} else {
-				adds = append(adds, sAddGuestnic{nic: vnics[i], net: localNet})
+				adds = append(adds, sAddGuestnic{index: i, nic: vnics[i], net: localNet})
 			}
 		}
 	}
@@ -2401,14 +2348,18 @@ func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCrede
 	}
 
 	for _, add := range adds {
-		if len(add.nic.GetIP()) == 0 {
+		if len(add.nic.GetIP()) == 0 && len(ipList) <= add.index {
 			continue // cannot determine which network it attached to
 		}
 		if add.net == nil {
 			continue // cannot determine which network it attached to
 		}
+		ipStr := add.nic.GetIP()
+		if len(ipStr) == 0 {
+			ipStr = ipList[add.index]
+		}
 		// check if the IP has been occupied, if yes, release the IP
-		gn, err := GuestnetworkManager.getGuestNicByIP(add.nic.GetIP(), add.net.Id)
+		gn, err := GuestnetworkManager.getGuestNicByIP(ipStr, add.net.Id)
 		if err != nil {
 			result.AddError(err)
 			continue
@@ -2425,7 +2376,7 @@ func (self *SGuest) SyncVMNics(ctx context.Context, userCred mcclient.TokenCrede
 			Index:  -1,
 			Ifname: "",
 		}
-		_, err = self.Attach2Network(ctx, userCred, add.net, nil, add.nic.GetIP(),
+		_, err = self.Attach2Network(ctx, userCred, add.net, nil, ipStr,
 			add.nic.GetDriver(), 0, false, add.reserve, IPAllocationDefault, true, []SNicConfig{nicConf})
 		if err != nil {
 			result.AddError(err)
@@ -2775,7 +2726,7 @@ func (self *SGuest) attach2NetworkDesc(
 			}
 			errs = append(errs, err)
 		}
-		return nil, errors.NewAggregate(errs)
+		return nil, errors_aggr.NewAggregate(errs)
 	} else {
 		netConfig.Network = ""
 		return self.attach2RandomNetwork(ctx, userCred, host, netConfig, pendingUsage)
@@ -2789,7 +2740,7 @@ func (self *SGuest) attach2NamedNetworkDesc(ctx context.Context, userCred mcclie
 		if len(nicConfs) == 0 {
 			return nil, fmt.Errorf("no avaialble network interface?")
 		}
-		gn, err := self.Attach2Network(ctx, userCred, net, pendingUsage, netConfig.Address, netConfig.Driver, netConfig.BwLimit, netConfig.Vip, netConfig.Reserved, allocDir, false, nicConfs)
+		gn, err := self.Attach2Network(ctx, userCred, net, pendingUsage, netConfig.Address, netConfig.Driver, netConfig.BwLimit, netConfig.Vip, netConfig.Reserved, allocDir, netConfig.RequireDesignatedIP, nicConfs)
 		if err != nil {
 			log.Errorf("Attach2Network fail %s", err)
 			return nil, err
@@ -4343,29 +4294,26 @@ func (self *SGuest) ToCreateInput(userCred mcclient.TokenCredential) *api.Server
 	}
 	if self.GetHypervisor() != api.HYPERVISOR_BAREMETAL {
 		// fill missing create params like schedtags
+		disks := []*api.DiskConfig{}
 		for idx, disk := range genInput.Disks {
+			tmpD := disk
 			if idx < len(userInput.Disks) {
-				disk.Schedtags = userInput.Disks[idx].Schedtags
-				userInput.Disks[idx] = disk
-			} else {
-				userInput.Disks = append(userInput.Disks, disk)
+				tmpD.Schedtags = userInput.Disks[idx].Schedtags
 			}
+			disks = append(disks, tmpD)
 		}
+		userInput.Disks = disks
 	}
+	nets := []*api.NetworkConfig{}
 	for idx, net := range genInput.Networks {
+		tmpN := net
 		if idx < len(userInput.Networks) {
-			userInput.Networks[idx] = net
-		} else {
-			userInput.Networks = append(userInput.Networks, net)
+			tmpN.Schedtags = userInput.Disks[idx].Schedtags
 		}
+		nets = append(nets, tmpN)
 	}
-	for idx, dev := range genInput.IsolatedDevices {
-		if idx < len(userInput.IsolatedDevices) {
-			userInput.IsolatedDevices[idx] = dev
-		} else {
-			userInput.IsolatedDevices = append(userInput.IsolatedDevices, dev)
-		}
-	}
+	userInput.Networks = nets
+	userInput.IsolatedDevices = genInput.IsolatedDevices
 	userInput.Count = 1
 	// override some old userInput properties via genInput because of change config behavior
 	userInput.VmemSize = genInput.VmemSize
@@ -4384,12 +4332,17 @@ func (self *SGuest) ToCreateInput(userCred mcclient.TokenCredential) *api.Server
 	if genInput.ResourceType != "" {
 		userInput.ResourceType = genInput.ResourceType
 	}
+	if genInput.InstanceType != "" {
+		userInput.InstanceType = genInput.InstanceType
+	}
 	if genInput.PreferRegion != "" {
 		userInput.PreferRegion = genInput.PreferRegion
 	}
 	if genInput.PreferZone != "" {
 		userInput.PreferZone = genInput.PreferZone
 	}
+	// clean GenerateName
+	userInput.GenerateName = ""
 	return userInput
 }
 
@@ -4517,4 +4470,37 @@ func (self *SGuest) ToIsolatedDevicesConfig() []*api.IsolatedDeviceConfig {
 
 func (self *SGuest) IsImport(userCred mcclient.TokenCredential) bool {
 	return self.GetMetadata("__is_import", userCred) == "true"
+}
+
+func (guest *SGuest) AllowGetDetailsRemoteNics(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject) bool {
+	return db.IsAdminAllowGetSpec(userCred, guest, "remote-nics")
+}
+
+func (guest *SGuest) GetDetailsRemoteNics(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject) (jsonutils.JSONObject, error) {
+	iVM, err := guest.GetIVM()
+	if err != nil {
+		return nil, httperrors.NewGeneralError(err)
+	}
+	iNics, err := iVM.GetINics()
+	if err != nil {
+		return nil, httperrors.NewGeneralError(err)
+	}
+	type SVNic struct {
+		Index  int
+		Ip     string
+		Mac    string
+		Driver string
+	}
+	nics := make([]SVNic, len(iNics))
+	for i := range iNics {
+		nics[i] = SVNic{
+			Index:  i,
+			Ip:     iNics[i].GetIP(),
+			Mac:    iNics[i].GetMAC(),
+			Driver: iNics[i].GetDriver(),
+		}
+	}
+	// ret := jsonutils.NewDict()
+	// ret.Set("vnics", jsonutils.Marshal(nics))
+	return jsonutils.Marshal(nics), nil
 }

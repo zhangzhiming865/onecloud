@@ -88,7 +88,7 @@ func AddQuotaHandler(manager *SQuotaBaseManager, prefix string, app *appsrv.Appl
 	auth.Authenticate(checkQuotaHanlder), nil, "check_quota", nil)*/
 }
 
-func (manager *SQuotaBaseManager) queryQuota(ctx context.Context, scope rbacutils.TRbacScope, ownerId mcclient.IIdentityProvider, platforma []string) (*jsonutils.JSONDict, IQuota, error) {
+func (manager *SQuotaBaseManager) queryQuota(ctx context.Context, scope rbacutils.TRbacScope, ownerId mcclient.IIdentityProvider, platforma []string, refresh bool) (*jsonutils.JSONDict, IQuota, error) {
 	ret := jsonutils.NewDict()
 
 	quota := manager.newQuota()
@@ -101,9 +101,9 @@ func (manager *SQuotaBaseManager) queryQuota(ctx context.Context, scope rbacutil
 	if err != nil {
 		return nil, nil, err
 	}
-	if usage.IsEmpty() {
+	if usage.IsEmpty() || refresh {
 		usageChan := make(chan IQuota)
-		manager.PostUsageJob(scope, ownerId, nil, usageChan, false)
+		manager.PostUsageJob(scope, ownerId, nil, usageChan, false, true)
 
 		usage = <-usageChan
 	}
@@ -157,7 +157,7 @@ func (manager *SQuotaBaseManager) getQuotaHanlder(ctx context.Context, w http.Re
 		scope = rbacutils.ScopeProject
 	}
 
-	quota, _, err := manager.queryQuota(ctx, scope, ownerId, nil)
+	quota, _, err := manager.queryQuota(ctx, scope, ownerId, nil, true)
 
 	if err != nil {
 		httperrors.GeneralServerError(w, err)
@@ -253,58 +253,61 @@ func (manager *SQuotaBaseManager) setQuotaHanlder(ctx context.Context, w http.Re
 		oquota.Update(quota)
 	}
 
-	if scope == rbacutils.ScopeProject {
-		total, err := manager.getDomainTotalQuota(ctx, ownerId.GetProjectDomainId(), []string{ownerId.GetProjectId()})
-		if err != nil {
-			log.Errorf("get total quota fail %s", err)
-			httperrors.GeneralServerError(w, err)
-			return
-		}
-
-		domainQuota := manager.newQuota()
-		err = manager.GetQuota(ctx, rbacutils.ScopeDomain, ownerId, nil, domainQuota)
-		if err != nil {
-			log.Errorf("GetQuota for domain %s fail %s", ownerId.GetProjectDomainId(), err)
-			httperrors.GeneralServerError(w, err)
-			return
-		}
-
-		total.Add(oquota)
-		err = total.Exceed(quota, domainQuota)
-		if err != nil {
-			// exeed domain quota
-			cascade, _ := body.Bool(manager.KeywordPlural(), "cascade")
-			if !cascade {
-				log.Errorf("project quota exeed domain quota: %s", err)
-				httperrors.OutOfQuotaError(w, "project quota exeed domain quota")
+	if consts.GetNonDefaultDomainProjects() {
+		// only if non-default-domain-project is turned ON, check the conformance between project quotas and domain quotas
+		if scope == rbacutils.ScopeProject {
+			total, err := manager.getDomainTotalQuota(ctx, ownerId.GetProjectDomainId(), []string{ownerId.GetProjectId()})
+			if err != nil {
+				log.Errorf("get total quota fail %s", err)
+				httperrors.GeneralServerError(w, err)
 				return
-			} else {
-				if allowScope != rbacutils.ScopeSystem {
-					httperrors.OutOfQuotaError(w, "project quota exeed domain quota, no previlige to cascade set")
+			}
+
+			domainQuota := manager.newQuota()
+			err = manager.GetQuota(ctx, rbacutils.ScopeDomain, ownerId, nil, domainQuota)
+			if err != nil {
+				log.Errorf("GetQuota for domain %s fail %s", ownerId.GetProjectDomainId(), err)
+				httperrors.GeneralServerError(w, err)
+				return
+			}
+
+			total.Add(oquota)
+			err = total.Exceed(quota, domainQuota)
+			if err != nil {
+				// exeed domain quota
+				cascade, _ := body.Bool(manager.KeywordPlural(), "cascade")
+				if !cascade {
+					log.Errorf("project quota exeed domain quota: %s", err)
+					httperrors.OutOfQuotaError(w, "project quota exeed domain quota")
 					return
 				} else {
-					// cascade set domain quota
-					err = manager.SetQuota(ctx, userCred, rbacutils.ScopeDomain, ownerId, nil, total)
-					if err != nil {
-						log.Errorf("cascade set quota fail %s", err)
-						httperrors.GeneralServerError(w, err)
+					if allowScope != rbacutils.ScopeSystem {
+						httperrors.OutOfQuotaError(w, "project quota exeed domain quota, no previlige to cascade set")
 						return
+					} else {
+						// cascade set domain quota
+						err = manager.SetQuota(ctx, userCred, rbacutils.ScopeDomain, ownerId, nil, total)
+						if err != nil {
+							log.Errorf("cascade set quota fail %s", err)
+							httperrors.GeneralServerError(w, err)
+							return
+						}
 					}
 				}
 			}
-		}
-	} else {
-		total, err := manager.getDomainTotalQuota(ctx, ownerId.GetProjectDomainId(), nil)
-		if err != nil {
-			log.Errorf("get total quota fail %s", err)
-			httperrors.GeneralServerError(w, err)
-			return
-		}
-		err = total.Exceed(quota, oquota)
-		if err != nil {
-			log.Errorf("project quota exeed domain quota: %s", err)
-			httperrors.OutOfQuotaError(w, "project quota exeed domain quota")
-			return
+		} else {
+			total, err := manager.getDomainTotalQuota(ctx, ownerId.GetProjectDomainId(), nil)
+			if err != nil {
+				log.Errorf("get total quota fail %s", err)
+				httperrors.GeneralServerError(w, err)
+				return
+			}
+			err = total.Exceed(quota, oquota)
+			if err != nil {
+				log.Errorf("project quota exeed domain quota: %s", err)
+				httperrors.OutOfQuotaError(w, "project quota exeed domain quota")
+				return
+			}
 		}
 	}
 
@@ -429,6 +432,11 @@ func (manager *SQuotaBaseManager) listQuotas(ctx context.Context, targetDomainId
 		// domain only
 		q = q.IsNullOrEmpty("tenant_id")
 	}
+	// if tuen OFF NonDefaultDOmainProjects
+	// no domain quota should return
+	if !consts.GetNonDefaultDomainProjects() {
+		q = q.IsNotEmpty("tenant_id")
+	}
 	// dsable platform
 	q = q.IsNullOrEmpty("platform")
 	rows, err := q.Rows()
@@ -455,14 +463,11 @@ func (manager *SQuotaBaseManager) listQuotas(ctx context.Context, targetDomainId
 			scope = rbacutils.ScopeDomain
 		}
 		platform := strings.Split(platformStr, nameSeparator)
-		quota, _, err := manager.queryQuota(ctx, scope, &owner, platform)
+		quota, _, err := manager.queryQuota(ctx, scope, &owner, platform, false)
 		if err != nil {
 			log.Errorf("query quota for %s fail %s", getMemoryStoreKey(scope, &owner, platform), err)
 			continue
 		}
-		// if usage.IsEmpty() {
-		//	continue
-		// }
 		if len(projectId) > 0 {
 			quota.Set("tenant_id", jsonutils.NewString(projectId))
 			quota.Set("domain_id", jsonutils.NewString(domainId))
@@ -487,14 +492,15 @@ func (manager *SQuotaBaseManager) listQuotas(ctx context.Context, targetDomainId
 		}
 		ret = append(ret, quota)
 	}
-	if len(ret) == 0 && len(targetDomainId) > 0 {
+	// if no projects for a domain and NonDefaultDomainProjects is turned ON
+	if len(ret) == 0 && len(targetDomainId) > 0 && consts.GetNonDefaultDomainProjects() {
 		// return the initial quota of targetDomainId
 		scope := rbacutils.ScopeDomain
 		owner := db.SOwnerId{
 			DomainId: targetDomainId,
 		}
 		platform := []string{}
-		quota, _, err := manager.queryQuota(ctx, scope, &owner, platform)
+		quota, _, err := manager.queryQuota(ctx, scope, &owner, platform, false)
 		if err != nil {
 			return nil, httperrors.NewInternalServerError("query domain initial quotas %s", err)
 		}

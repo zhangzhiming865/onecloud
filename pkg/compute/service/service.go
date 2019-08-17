@@ -34,15 +34,16 @@ import (
 	_ "yunion.io/x/onecloud/pkg/compute/regiondrivers"
 	_ "yunion.io/x/onecloud/pkg/compute/storagedrivers"
 	_ "yunion.io/x/onecloud/pkg/compute/tasks"
-	_ "yunion.io/x/onecloud/pkg/util/aliyun/provider"
-	_ "yunion.io/x/onecloud/pkg/util/aws/provider"
-	_ "yunion.io/x/onecloud/pkg/util/azure/provider"
-	_ "yunion.io/x/onecloud/pkg/util/esxi/provider"
-	_ "yunion.io/x/onecloud/pkg/util/huawei/provider"
-	_ "yunion.io/x/onecloud/pkg/util/openstack/provider"
-	_ "yunion.io/x/onecloud/pkg/util/qcloud/provider"
-	_ "yunion.io/x/onecloud/pkg/util/ucloud/provider"
-	_ "yunion.io/x/onecloud/pkg/util/zstack/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/aliyun/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/aws/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/azure/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/esxi/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/huawei/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/objectstore/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/openstack/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/qcloud/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/ucloud/provider"
+	_ "yunion.io/x/onecloud/pkg/multicloud/zstack/provider"
 )
 
 func StartService() {
@@ -64,23 +65,13 @@ func StartService() {
 		log.Infof("Auth complete!!")
 	})
 
-	cloudcommon.InitDB(dbOpts)
-	defer cloudcommon.CloseDB()
-
 	app := app_common.InitApp(baseOpts, true)
-	cloudcommon.AppDBInit(app)
 	InitHandlers(app)
 
-	if !db.CheckSync(opts.AutoSyncTable) {
-		log.Fatalf("database schema not in sync!")
-	}
+	db.EnsureAppInitSyncDB(app, dbOpts, models.InitDB)
+	defer cloudcommon.CloseDB()
 
-	err := models.InitDB()
-	if err != nil {
-		log.Errorf("InitDB fail: %s", err)
-	}
-
-	err = setInfluxdbRetentionPolicy()
+	err := setInfluxdbRetentionPolicy()
 	if err != nil {
 		log.Errorf("setInfluxdbRetentionPolicy fail: %s", err)
 	}

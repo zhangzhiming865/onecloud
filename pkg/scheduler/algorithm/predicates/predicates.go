@@ -12,6 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package predicates
 
 import (
@@ -103,13 +115,34 @@ func (h *PredicateHelper) AppendPredicateFail(reason core.PredicateFailureReason
 	h.predicateFails = append(h.predicateFails, reason)
 }
 
+type predicateFailure struct {
+	err   core.PredicateFailureError
+	eType string
+}
+
+func (f predicateFailure) GetReason() string {
+	return f.err.GetReason()
+}
+
+func (f predicateFailure) GetType() string {
+	return f.eType
+}
+
 func (h *PredicateHelper) AppendPredicateFailMsg(reason string) {
-	h.AppendPredicateFail(NewUnexceptedResourceError(reason))
+	h.AppendPredicateFailMsgWithType(reason, h.predicate.Name())
+}
+
+func (h *PredicateHelper) AppendPredicateFailMsgWithType(reason string, eType string) {
+	err := NewUnexceptedResourceError(reason)
+	h.AppendPredicateFail(&predicateFailure{err: err, eType: eType})
 }
 
 func (h *PredicateHelper) AppendInsufficientResourceError(req, total, free int64) {
 	h.AppendPredicateFail(
-		NewInsufficientResourceError(h.Candidate.Getter().Name(), req, total, free))
+		&predicateFailure{
+			err:   NewInsufficientResourceError(h.Candidate.Getter().Name(), req, total, free),
+			eType: h.predicate.Name(),
+		})
 }
 
 // SetCapacity returns the current resource capacity calculated by a filter.
@@ -135,6 +168,13 @@ func (h *PredicateHelper) SetCapacityCounter(counter core.Counter) {
 func (h *PredicateHelper) Exclude(reason string) {
 	h.SetCapacity(0)
 	h.AppendPredicateFailMsg(reason)
+}
+
+func (h *PredicateHelper) ExcludeByErrors(errs []core.PredicateFailureReason) {
+	h.SetCapacity(0)
+	for _, err := range errs {
+		h.AppendPredicateFail(err)
+	}
 }
 
 func (h *PredicateHelper) Exclude2(predicateName string, current, expected interface{}) {
@@ -204,7 +244,8 @@ type ISchedtagPredicateInstance interface {
 
 	GetInputs(u *core.Unit) []ISchedtagCustomer
 	GetResources(c core.Candidater) []ISchedtagCandidateResource
-	IsResourceFitInput(unit *core.Unit, c core.Candidater, res ISchedtagCandidateResource, input ISchedtagCustomer) error
+	IsResourceMatchInput(input ISchedtagCustomer, res ISchedtagCandidateResource) bool
+	IsResourceFitInput(unit *core.Unit, c core.Candidater, res ISchedtagCandidateResource, input ISchedtagCustomer) core.PredicateFailureReason
 
 	DoSelect(c core.Candidater, input ISchedtagCustomer, res []ISchedtagCandidateResource) []ISchedtagCandidateResource
 	AddSelectResult(index int, selectRes []ISchedtagCandidateResource, output *core.AllocatedResource)
@@ -242,6 +283,7 @@ type ISchedtagCustomer interface {
 	JSON(interface{}) *jsonutils.JSONDict
 	Keyword() string
 	GetSchedtags() []*computeapi.SchedtagConfig
+	ResourceKeyword() string
 }
 
 type SchedtagResourceW struct {
@@ -354,11 +396,23 @@ func (p *BaseSchedtagPredicate) Execute(
 	h := NewPredicateHelper(sp, u, c)
 
 	inputRes := p.GetInputResourcesMap(c.IndexKey())
-	filterErrs := make([]error, 0)
+	filterErrs := make([]core.PredicateFailureReason, 0)
 	for idx, input := range inputs {
 		fitResources := make([]ISchedtagCandidateResource, 0)
-		errs := make([]error, 0)
-		for _, res := range resources {
+		errs := make([]core.PredicateFailureReason, 0)
+		matchedRes := make([]ISchedtagCandidateResource, 0)
+		for _, r := range resources {
+			if sp.IsResourceMatchInput(input, r) {
+				matchedRes = append(matchedRes, r)
+			}
+		}
+		if len(matchedRes) == 0 {
+			errs = append(errs, &FailReason{
+				Reason: fmt.Sprintf("Not found matched %s, candidate: %s, %s: %s", input.ResourceKeyword(), c.Getter().Name(), input.Keyword(), input.JSON(input).String()),
+				Type:   fmt.Sprintf("%s_match", input.ResourceKeyword()),
+			})
+		}
+		for _, res := range matchedRes {
 			if err := sp.IsResourceFitInput(u, c, res, input); err == nil {
 				fitResources = append(fitResources, res)
 			} else {
@@ -366,20 +420,19 @@ func (p *BaseSchedtagPredicate) Execute(
 			}
 		}
 		if len(fitResources) == 0 {
-			h.Exclude(fmt.Sprintf("Not found available resources for %s %s: %s", input.Keyword(), input.JSON(input), errors.NewAggregate(errs)))
+			h.ExcludeByErrors(errs)
 			break
 		}
 		if len(errs) > 0 {
-			filterErrs = append(filterErrs, errors.NewAggregate(errs))
+			filterErrs = append(filterErrs, errs...)
 		}
 
 		matchedResources, err := p.checkResources(input, fitResources, u, c)
 		if err != nil {
-			aggErr := errors.NewAggregate(filterErrs)
-			errMsg := fmt.Sprintf("schedtag: %v", err.Error())
-			if aggErr != nil {
-				errMsg = fmt.Sprintf("%s; filter: %v", errMsg, aggErr.Error())
+			if len(filterErrs) > 0 {
+				h.ExcludeByErrors(filterErrs)
 			}
+			errMsg := fmt.Sprintf("schedtag: %v", err.Error())
 			h.Exclude(errMsg)
 		}
 		inputRes[idx] = matchedResources

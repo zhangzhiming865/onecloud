@@ -30,7 +30,6 @@ import (
 	"yunion.io/x/pkg/util/regutils"
 
 	"yunion.io/x/onecloud/pkg/cloudcommon/types"
-	deployapi "yunion.io/x/onecloud/pkg/hostman/hostdeployer/apis"
 	"yunion.io/x/onecloud/pkg/util/procutils"
 	"yunion.io/x/onecloud/pkg/util/regutils2"
 )
@@ -45,14 +44,12 @@ var PRIVATE_PREFIXES = []string{
 }
 
 func IsTcpPortUsed(addr string, port int) bool {
-	conn, _ := net.Dial("tcp", fmt.Sprintf("%s:%d", addr, port))
-	if conn != nil {
-		conn.Close()
-		log.Infof("Tcp port in use: %s %d", addr, port)
+	server, err := net.Listen("tcp", fmt.Sprintf("%s:%d", addr, port))
+	if err != nil {
 		return true
-	} else {
-		return false
 	}
+	server.Close()
+	return false
 }
 
 // MyIP returns source ip used to communicate with udp:114.114.114.114:53
@@ -79,9 +76,9 @@ func GetPrivatePrefixes(privatePrefixes []string) []string {
 	}
 }
 
-func GetMainNicFromDeployApi(nics []*deployapi.Nic) (*deployapi.Nic, error) {
+func GetMainNicFromDeployApi(nics []*types.SServerNic) (*types.SServerNic, error) {
 	var mainIp netutils.IPV4Addr
-	var mainNic *deployapi.Nic
+	var mainNic *types.SServerNic
 	for _, n := range nics {
 		if len(n.Gateway) > 0 {
 			ip := n.Ip
@@ -159,9 +156,9 @@ func addRoute(routes *[][]string, net, gw string) {
 	*routes = append(*routes, []string{net, gw})
 }
 
-func extendRoutes(routes *[][]string, nicRoutes []*deployapi.Routes) error {
+func extendRoutes(routes *[][]string, nicRoutes []types.SRoute) error {
 	for i := 0; i < len(nicRoutes); i++ {
-		addRoute(routes, nicRoutes[i].Route[0], nicRoutes[i].Route[1])
+		addRoute(routes, nicRoutes[i][0], nicRoutes[i][1])
 	}
 	return nil
 }

@@ -17,13 +17,12 @@ package main
 import (
 	"fmt"
 	"os"
-	"yunion.io/x/onecloud/pkg/util/ucloud"
+	"yunion.io/x/onecloud/pkg/multicloud/ucloud"
 
-	"yunion.io/x/log"
 	"yunion.io/x/structarg"
 
+	_ "yunion.io/x/onecloud/pkg/multicloud/ucloud/shell"
 	"yunion.io/x/onecloud/pkg/util/shellutils"
-	_ "yunion.io/x/onecloud/pkg/util/ucloud/shell"
 )
 
 type BaseOptions struct {
@@ -73,7 +72,8 @@ func getSubcommandParser() (*structarg.ArgumentParser, error) {
 }
 
 func showErrorAndExit(e error) {
-	log.Errorf("%s", e)
+	fmt.Fprintf(os.Stderr, "%s", e)
+	fmt.Fprintln(os.Stderr)
 	os.Exit(1)
 }
 

@@ -188,7 +188,7 @@ func (manager *SGuestnetworkManager) newGuestNetwork(ctx context.Context, userCr
 			return nil, err
 		}
 		if len(address) > 0 && ipAddr != address && requiredDesignatedIp {
-			return nil, fmt.Errorf("candidate ip %s is occupoed!", address)
+			return nil, fmt.Errorf("candidate ip %s is occupied!", address)
 		}
 		gn.IpAddr = ipAddr
 	}
@@ -284,12 +284,12 @@ func (self *SGuestnetwork) getJsonDescAtBaremetal(host *SHost) jsonutils.JSONObj
 	return self.getGeneralJsonDesc(host, network, hostwire)
 }
 
-func getHostNetworkAdminWire(host *SHost, network *SNetwork) (*SHostwire, error) {
+func guestGetHostWireFromNetwork(host *SHost, network *SNetwork) (*SHostwire, error) {
 	hostwires := host.getHostwiresOfId(network.WireId)
 	var hostWire *SHostwire
 	for i := 0; i < len(hostwires); i++ {
 		if netInter, _ := NetInterfaceManager.FetchByMac(hostwires[i].MacAddr); netInter != nil {
-			if netInter.NicType == api.NIC_TYPE_ADMIN {
+			if netInter.NicType != api.NIC_TYPE_IPMI {
 				hostWire = &hostwires[i]
 				break
 			}
@@ -304,7 +304,7 @@ func getHostNetworkAdminWire(host *SHost, network *SNetwork) (*SHostwire, error)
 
 func (self *SGuestnetwork) getJsonDescAtHost(host *SHost) jsonutils.JSONObject {
 	network := self.GetNetwork()
-	hostWire, err := getHostNetworkAdminWire(host, network)
+	hostWire, err := guestGetHostWireFromNetwork(host, network)
 	if err != nil {
 		log.Errorln(err)
 	}
@@ -698,8 +698,14 @@ func (self *SGuestnetwork) ToNetworkConfig() *api.NetworkConfig {
 		Index:   int(self.Index),
 		Network: net.Id,
 		Wire:    net.GetWire().Id,
+		Mac:     self.MacAddr,
 		Address: self.IpAddr,
+		Driver:  self.Driver,
+		BwLimit: self.BwLimit,
 		Project: net.ProjectId,
+		Domain:  net.DomainId,
+		Ifname:  self.Ifname,
+		NetType: net.ServerType,
 	}
 	return ret
 }

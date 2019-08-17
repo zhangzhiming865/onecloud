@@ -22,6 +22,7 @@ import (
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/tristate"
 	"yunion.io/x/pkg/util/compare"
 	"yunion.io/x/pkg/utils"
@@ -30,87 +31,13 @@ import (
 	api "yunion.io/x/onecloud/pkg/apis/compute"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/lockman"
+	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 	"yunion.io/x/onecloud/pkg/compute/options"
 	"yunion.io/x/onecloud/pkg/httperrors"
 	"yunion.io/x/onecloud/pkg/mcclient"
 	"yunion.io/x/onecloud/pkg/util/rbacutils"
 )
-
-/*
-const (
-	STORAGE_LOCAL     = api.STORAGE_LOCAL
-	STORAGE_BAREMETAL = api.STORAGE_BAREMETAL
-	STORAGE_SHEEPDOG  = api.STORAGE_SHEEPDOG
-	STORAGE_RBD       = api.STORAGE_RBD
-	STORAGE_DOCKER    = api.STORAGE_DOCKER
-	STORAGE_NAS       = api.STORAGE_NAS
-	STORAGE_VSAN      = api.STORAGE_VSAN
-	STORAGE_NFS       = api.STORAGE_NFS
-	STORAGE_MEBS       = api.STORAGE_MEBS
-
-	STORAGE_PUBLIC_CLOUD     = api.STORAGE_PUBLIC_CLOUD
-	STORAGE_CLOUD_EFFICIENCY = api.STORAGE_CLOUD_EFFICIENCY
-	STORAGE_CLOUD_SSD        = api.STORAGE_CLOUD_SSD
-	STORAGE_CLOUD_ESSD       = api.STORAGE_CLOUD_ESSD    //增强型(Enhanced)SSD 云盘
-	STORAGE_EPHEMERAL_SSD    = api.STORAGE_EPHEMERAL_SSD //单块本地SSD盘, 容量最大不能超过800 GiB
-
-	//Azure hdd and ssd storagetype
-	STORAGE_STANDARD_LRS    = api.STORAGE_STANDARD_LRS
-	STORAGE_STANDARDSSD_LRS = api.STORAGE_STANDARDSSD_LRS
-	STORAGE_PREMIUM_LRS     = api.STORAGE_PREMIUM_LRS
-
-	// aws storage type
-	STORAGE_GP2_SSD      = api.STORAGE_GP2_SSD      // aws general purpose ssd
-	STORAGE_IO1_SSD      = api.STORAGE_IO1_SSD      // aws Provisioned IOPS SSD
-	STORAGE_ST1_HDD      = api.STORAGE_ST1_HDD      // aws Throughput Optimized HDD
-	STORAGE_SC1_HDD      = api.STORAGE_SC1_HDD      // aws Cold HDD
-	STORAGE_STANDARD_HDD = api.STORAGE_STANDARD_HDD // aws Magnetic volumes
-
-	// qcloud storage type
-	// STORAGE_CLOUD_SSD ="cloud_ssd"
-	STORAGE_LOCAL_BASIC   = api.STORAGE_LOCAL_BASIC
-	STORAGE_LOCAL_SSD     = api.STORAGE_LOCAL_SSD
-	STORAGE_CLOUD_BASIC   = api.STORAGE_CLOUD_BASIC
-	STORAGE_CLOUD_PREMIUM = api.STORAGE_CLOUD_PREMIUM
-
-	// huawei storage type
-	STORAGE_HUAWEI_SSD  = api.STORAGE_HUAWEI_SSD  // 超高IO云硬盘
-	STORAGE_HUAWEI_SAS  = api.STORAGE_HUAWEI_SAS  // 高IO云硬盘
-	STORAGE_HUAWEI_SATA = api.STORAGE_HUAWEI_SATA // 普通IO云硬盘
-
-	// openstack
-	STORAGE_OPENSTACK_ISCSI = api.STORAGE_OPENSTACK_ISCSI
-
-	// Ucloud storage type
-	STORAGE_UCLOUD_CLOUD_NORMAL         = api.STORAGE_UCLOUD_CLOUD_NORMAL
-	STORAGE_UCLOUD_CLOUD_SSD            = api.STORAGE_UCLOUD_CLOUD_SSD
-	STORAGE_UCLOUD_LOCAL_NORMAL         = api.STORAGE_UCLOUD_LOCAL_NORMAL
-	STORAGE_UCLOUD_LOCAL_SSD            = api.STORAGE_UCLOUD_LOCAL_SSD
-	STORAGE_UCLOUD_EXCLUSIVE_LOCAL_DISK = api.STORAGE_UCLOUD_EXCLUSIVE_LOCAL_DISK
-)
-
-const (
-	STORAGE_ENABLED = api.STORAGE_ENABLED
-	// STORAGE_DISABLED = "disabled"
-	STORAGE_OFFLINE = api.STORAGE_OFFLINE
-	STORAGE_ONLINE  = api.STORAGE_ONLINE
-
-	DISK_TYPE_ROTATE = api.DISK_TYPE_ROTATE
-	DISK_TYPE_SSD    = api.DISK_TYPE_SSD
-	DISK_TYPE_HYBRID = api.DISK_TYPE_HYBRID
-)
-
-var (
-	DISK_TYPES            = api.DISK_TYPES
-	STORAGE_LOCAL_TYPES   = api.STORAGE_LOCAL_TYPES
-	STORAGE_SUPPORT_TYPES = STORAGE_LOCAL_TYPES
-	STORAGE_ALL_TYPES     = api.STORAGE_ALL_TYPES
-	STORAGE_TYPES         = api.STORAGE_TYPES
-
-	STORAGE_LIMITED_TYPES = api.STORAGE_LIMITED_TYPES
-)
-*/
 
 type SStorageManager struct {
 	db.SStandaloneResourceBaseManager
@@ -138,7 +65,7 @@ type SStorage struct {
 
 	Capacity    int64                `nullable:"false" list:"admin" update:"admin" create:"admin_required"`                           // Column(Integer, nullable=False) # capacity of disk in MB
 	Reserved    int64                `nullable:"true" default:"0" list:"admin" update:"admin"`                                        // Column(Integer, nullable=True, default=0)
-	StorageType string               `width:"32" charset:"ascii" nullable:"false" list:"user" update:"admin" create:"admin_required"` // Column(VARCHAR(32, charset='ascii'), nullable=False)
+	StorageType string               `width:"32" charset:"ascii" nullable:"false" list:"user" create:"admin_required"`                // Column(VARCHAR(32, charset='ascii'), nullable=False)
 	MediumType  string               `width:"32" charset:"ascii" nullable:"false" list:"user" update:"admin" create:"admin_required"` // Column(VARCHAR(32, charset='ascii'), nullable=False)
 	Cmtbound    float32              `nullable:"true" default:"1" list:"admin" update:"admin"`                                        // Column(Float, nullable=True)
 	StorageConf jsonutils.JSONObject `nullable:"true" get:"admin" update:"admin"`                                                     // = Column(JSONEncodedDict, nullable=True)
@@ -177,6 +104,14 @@ func (self *SStorage) AllowUpdateItem(ctx context.Context, userCred mcclient.Tok
 	return db.IsAdminAllowUpdate(userCred, self)
 }
 
+func (self *SStorage) ValidateUpdateData(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
+	driver := GetStorageDriver(self.StorageType)
+	if driver != nil {
+		return driver.ValidateUpdateData(ctx, userCred, data, self)
+	}
+	return data, nil
+}
+
 func (self *SStorage) PostUpdate(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data jsonutils.JSONObject) {
 	self.SStandaloneResourceBase.PostUpdate(ctx, userCred, query, data)
 
@@ -188,6 +123,19 @@ func (self *SStorage) PostUpdate(ctx context.Context, userCred mcclient.TokenCre
 			}
 		}
 	}
+
+	if update, _ := data.Bool("update_storage_conf"); update {
+		self.StartStorageUpdateTask(ctx, userCred)
+	}
+}
+
+func (self *SStorage) StartStorageUpdateTask(ctx context.Context, userCred mcclient.TokenCredential) error {
+	task, err := taskman.TaskManager.NewTask(ctx, "StorageUpdateTask", self, userCred, nil, "", "", nil)
+	if err != nil {
+		return err
+	}
+	task.ScheduleRun(nil)
+	return nil
 }
 
 func (self *SStorage) AllowDeleteItem(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data jsonutils.JSONObject) bool {
@@ -197,6 +145,30 @@ func (self *SStorage) AllowDeleteItem(ctx context.Context, userCred mcclient.Tok
 func (self *SStorage) Delete(ctx context.Context, userCred mcclient.TokenCredential) error {
 	DeleteResourceJointSchedtags(self, ctx, userCred)
 	return self.SStandaloneResourceBase.Delete(ctx, userCred)
+}
+
+func (manager *SStorageManager) GetStorageTypesByHostType(hostType string) ([]string, error) {
+	q := manager.Query("storage_type")
+	hosts := HostManager.Query().SubQuery()
+	hs := HoststorageManager.Query().SubQuery()
+	q = q.Join(hs, sqlchemy.Equals(q.Field("id"), hs.Field("storage_id"))).
+		Join(hosts, sqlchemy.Equals(hosts.Field("id"), hs.Field("host_id"))).
+		Filter(sqlchemy.Equals(hosts.Field("host_type"), hostType)).Distinct()
+	storages := []string{}
+	rows, err := q.Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var storage string
+		err = rows.Scan(&storage)
+		if err != nil {
+			return nil, errors.Wrap(err, "rows.Scan(&storage)")
+		}
+		storages = append(storages, storage)
+	}
+	return storages, nil
 }
 
 func (manager *SStorageManager) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
@@ -710,7 +682,9 @@ func (self *SStorage) syncWithCloudStorage(ctx context.Context, userCred mcclien
 		self.Status = extStorage.GetStatus()
 		self.StorageType = extStorage.GetStorageType()
 		self.MediumType = extStorage.GetMediumType()
-		self.Capacity = extStorage.GetCapacityMB()
+		if capacity := extStorage.GetCapacityMB(); capacity != 0 {
+			self.Capacity = capacity
+		}
 		self.StorageConf = extStorage.GetStorageConf()
 
 		self.Enabled = tristate.NewFromBool(extStorage.GetEnabled())
@@ -1125,6 +1099,10 @@ func (manager *SStorageManager) ListItemFilter(ctx context.Context, q *sqlchemy.
 		return nil, err
 	}
 	q = managedResourceFilterByCloudType(q, query, "", nil)
+	q, err = managedResourceFilterByDomain(q, query, "", nil)
+	if err != nil {
+		return nil, err
+	}
 
 	q, err = manager.SStandaloneResourceBaseManager.ListItemFilter(ctx, q, userCred, query)
 	if err != nil {

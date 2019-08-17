@@ -314,15 +314,17 @@ func (self *SCloudprovider) syncProject(ctx context.Context, userCred mcclient.T
 		return errors.Wrap(err, "db.TenantCacheManager.FetchTenantByIdOrName")
 	}
 
+	account := self.GetCloudaccount()
+	if account == nil {
+		return errors.Error("no valid cloudaccount???")
+	}
+
 	var projectId, domainId string
-	if err == sql.ErrNoRows { // create one
+	if err == sql.ErrNoRows || tenant.DomainId != account.DomainId { // create one
 		s := auth.GetAdminSession(ctx, options.Options.Region, "")
 		params := jsonutils.NewDict()
-		params.Add(jsonutils.NewString(self.Name), "name")
-		account := self.GetCloudaccount()
-		if account == nil {
-			return errors.Error("no valid cloudaccount???")
-		}
+		params.Add(jsonutils.NewString(self.Name), "generate_name")
+
 		domainId = account.DomainId
 		params.Add(jsonutils.NewString(domainId), "domain_id")
 		params.Add(jsonutils.NewString(fmt.Sprintf("auto create from cloud provider %s (%s)", self.Name, self.Id)), "description")
@@ -591,9 +593,11 @@ func (self *SCloudprovider) markStartingSync(userCred mcclient.TokenCredential) 
 	}
 	cprs := self.GetCloudproviderRegions()
 	for i := range cprs {
-		err := cprs[i].markStartingSync(userCred)
-		if err != nil {
-			return errors.Wrap(err, "cprs[i].markStartingSync")
+		if cprs[i].Enabled {
+			err := cprs[i].markStartingSync(userCred)
+			if err != nil {
+				return errors.Wrap(err, "cprs[i].markStartingSync")
+			}
 		}
 	}
 	return nil
@@ -610,9 +614,11 @@ func (self *SCloudprovider) markStartSync(userCred mcclient.TokenCredential) err
 	}
 	cprs := self.GetCloudproviderRegions()
 	for i := range cprs {
-		err := cprs[i].markStartingSync(userCred)
-		if err != nil {
-			return errors.Wrap(err, "cprs[i].markStartingSync")
+		if cprs[i].Enabled {
+			err := cprs[i].markStartingSync(userCred)
+			if err != nil {
+				return errors.Wrap(err, "cprs[i].markStartingSync")
+			}
 		}
 	}
 	return nil
@@ -934,6 +940,37 @@ func (manager *SCloudproviderManager) ListItemFilter(ctx context.Context, q *sql
 		}
 		q = q.Equals("cloudaccount_id", accountObj.GetId())
 	}
+
+	if jsonutils.QueryBoolean(query, "usable", false) {
+		providers := CloudproviderManager.Query().SubQuery()
+		networks := NetworkManager.Query().SubQuery()
+		wires := WireManager.Query().SubQuery()
+		vpcs := VpcManager.Query().SubQuery()
+
+		sq := providers.Query(sqlchemy.DISTINCT("id", providers.Field("id")))
+		sq = sq.Join(vpcs, sqlchemy.Equals(vpcs.Field("manager_id"), providers.Field("id")))
+		sq = sq.Join(wires, sqlchemy.Equals(vpcs.Field("id"), wires.Field("vpc_id")))
+		sq = sq.Join(networks, sqlchemy.Equals(wires.Field("id"), networks.Field("wire_id")))
+		sq = sq.Filter(sqlchemy.Equals(networks.Field("status"), api.NETWORK_STATUS_AVAILABLE))
+		sq = sq.Filter(sqlchemy.IsTrue(providers.Field("enabled")))
+		sq = sq.Filter(sqlchemy.In(providers.Field("status"), api.CLOUD_PROVIDER_VALID_STATUS))
+		sq = sq.Filter(sqlchemy.In(providers.Field("health_status"), api.CLOUD_PROVIDER_VALID_HEALTH_STATUS))
+		sq = sq.Filter(sqlchemy.Equals(vpcs.Field("status"), api.VPC_STATUS_AVAILABLE))
+
+		sq2 := providers.Query(sqlchemy.DISTINCT("id", providers.Field("id")))
+		sq2 = sq2.Join(vpcs, sqlchemy.Equals(vpcs.Field("manager_id"), providers.Field("id")))
+		sq2 = sq2.Join(wires, sqlchemy.Equals(vpcs.Field("id"), wires.Field("vpc_id")))
+		sq2 = sq2.Join(networks, sqlchemy.Equals(wires.Field("id"), networks.Field("wire_id")))
+		sq2 = sq2.Filter(sqlchemy.Equals(networks.Field("status"), api.NETWORK_STATUS_AVAILABLE))
+		sq2 = sq2.Filter(sqlchemy.IsNullOrEmpty(vpcs.Field("manager_id")))
+		sq2 = sq2.Filter(sqlchemy.Equals(vpcs.Field("status"), api.VPC_STATUS_AVAILABLE))
+
+		q = q.Filter(sqlchemy.OR(
+			sqlchemy.In(q.Field("id"), sq.SubQuery()),
+			sqlchemy.In(q.Field("id"), sq2.SubQuery()),
+		))
+	}
+
 	q, err := manager.SEnabledStatusStandaloneResourceBaseManager.ListItemFilter(ctx, q, userCred, query)
 	if err != nil {
 		return nil, err
@@ -1083,6 +1120,7 @@ func (self *SCloudprovider) RealDelete(ctx context.Context, userCred mcclient.To
 	var err error
 
 	for _, manager := range []IPurgeableManager{
+		BucketManager,
 		HostManager,
 		SnapshotManager,
 		SnapshotPolicyManager,
@@ -1092,8 +1130,11 @@ func (self *SCloudprovider) RealDelete(ctx context.Context, userCred mcclient.To
 		LoadbalancerAclManager,
 		LoadbalancerCertificateManager,
 		NatGatewayManager,
+		DBInstanceManager,
+		DBInstanceBackupManager,
 		VpcManager,
 		ElasticipManager,
+		NetworkInterfaceManager,
 		CloudproviderRegionManager,
 		ExternalProjectManager,
 		CloudregionManager,

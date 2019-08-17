@@ -23,6 +23,7 @@ import (
 
 	"yunion.io/x/log"
 
+	api "yunion.io/x/onecloud/pkg/apis/image"
 	"yunion.io/x/onecloud/pkg/cloudcommon"
 	app_common "yunion.io/x/onecloud/pkg/cloudcommon/app"
 	"yunion.io/x/onecloud/pkg/cloudcommon/cronman"
@@ -37,16 +38,12 @@ import (
 	"yunion.io/x/onecloud/pkg/util/sysutils"
 )
 
-const (
-	SERVICE_TYPE = "image"
-)
-
 func StartService() {
 	opts := &options.Options
 	commonOpts := &opts.CommonOptions
 	baseOpts := &opts.BaseOptions
 	dbOpts := &opts.DBOptions
-	common_options.ParseOptions(opts, os.Args, "glance-api.conf", SERVICE_TYPE)
+	common_options.ParseOptions(opts, os.Args, "glance-api.conf", api.SERVICE_TYPE)
 
 	isRoot := sysutils.IsRootPermission()
 	if !isRoot {
@@ -91,16 +88,10 @@ func StartService() {
 		return
 	}
 
-	cloudcommon.InitDB(dbOpts)
-
 	app := app_common.InitApp(baseOpts, true)
 	initHandlers(app)
 
-	if !db.CheckSync(opts.AutoSyncTable) {
-		log.Fatalf("database schema not in sync!")
-	}
-
-	models.InitDB()
+	db.EnsureAppInitSyncDB(app, dbOpts, models.InitDB)
 
 	go models.CheckImages()
 
@@ -116,7 +107,6 @@ func StartService() {
 		cron.Start()
 	}
 
-	cloudcommon.AppDBInit(app)
 	app_common.ServeForeverWithCleanup(app, baseOpts, func() {
 		cloudcommon.CloseDB()
 
