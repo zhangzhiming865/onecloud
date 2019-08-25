@@ -15,6 +15,8 @@
 package compute
 
 const (
+	BUCKET_OPS_STATS_CHANGE = "stats_change"
+
 	BUCKET_STATUS_START_CREATE = "start_create"
 	BUCKET_STATUS_CREATING     = "creating"
 	BUCKET_STATUS_READY        = "ready"
@@ -25,5 +27,6 @@ const (
 	BUCKET_STATUS_DELETE_FAIL  = "delete_fail"
 
 	BUCKET_UPLOAD_OBJECT_KEY_HEADER          = "X-Yunion-Bucket-Upload-Key"
+	BUCKET_UPLOAD_OBJECT_ACL_HEADER          = "X-Yunion-Bucket-Upload-Acl"
 	BUCKET_UPLOAD_OBJECT_STORAGECLASS_HEADER = "X-Yunion-Bucket-Upload-Storageclass"
 )

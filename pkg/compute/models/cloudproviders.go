@@ -150,6 +150,10 @@ func (manager *SCloudproviderManager) GetPrivateProviderProvidersQuery() *sqlche
 	return manager.GetProviderProvidersQuery(tristate.False, tristate.False)
 }
 
+func (manager *SCloudproviderManager) GetOnPremiseProviderProvidersQuery() *sqlchemy.SSubQuery {
+	return manager.GetProviderProvidersQuery(tristate.None, tristate.True)
+}
+
 func (manager *SCloudproviderManager) GetProviderProvidersQuery(isPublic tristate.TriState, isOnPremise tristate.TriState) *sqlchemy.SSubQuery {
 	return manager.GetProviderFieldQuery("provider", isPublic, isOnPremise, nil, nil)
 }
@@ -679,6 +683,26 @@ func (self *SCloudprovider) markEndSync(userCred mcclient.TokenCredential) error
 	return nil
 }
 
+func (self *SCloudprovider) cancelStartingSync(userCred mcclient.TokenCredential) error {
+	if self.SyncStatus == api.CLOUD_PROVIDER_SYNC_STATUS_QUEUING {
+		cprs := self.GetCloudproviderRegions()
+		for i := range cprs {
+			err := cprs[i].cancelStartingSync(userCred)
+			if err != nil {
+				return errors.Wrap(err, "cprs[i].cancelStartingSync")
+			}
+		}
+		_, err := db.Update(self, func() error {
+			self.SyncStatus = api.CLOUD_PROVIDER_SYNC_STATUS_IDLE
+			return nil
+		})
+		if err != nil {
+			return errors.Wrap(err, "db.Update")
+		}
+	}
+	return nil
+}
+
 func (self *SCloudprovider) GetProviderFactory() (cloudprovider.ICloudProviderFactory, error) {
 	return cloudprovider.GetProviderFactory(self.Provider)
 }
@@ -1010,6 +1034,17 @@ func (manager *SCloudproviderManager) ListItemFilter(ctx context.Context, q *sql
 		q = q.Filter(sqlchemy.IsTrue(cloudaccounts.Field("is_on_premise")))
 	}
 
+	if query.Contains("has_object_storage") {
+		hasObjectStorage, _ := query.Bool("has_object_storage")
+		cloudaccounts := CloudaccountManager.Query().SubQuery()
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudaccounts.Field("id"), q.Field("cloudaccount_id")))
+		if hasObjectStorage {
+			q = q.Filter(sqlchemy.IsTrue(cloudaccounts.Field("has_object_storage")))
+		} else {
+			q = q.Filter(sqlchemy.IsFalse(cloudaccounts.Field("has_object_storage")))
+		}
+	}
+
 	return q, nil
 }
 
@@ -1127,11 +1162,13 @@ func (self *SCloudprovider) RealDelete(ctx context.Context, userCred mcclient.To
 		StorageManager,
 		StoragecacheManager,
 		LoadbalancerManager,
-		LoadbalancerAclManager,
-		LoadbalancerCertificateManager,
+		LoadbalancerBackendGroupManager,
+		CachedLoadbalancerAclManager,
+		CachedLoadbalancerCertificateManager,
 		NatGatewayManager,
 		DBInstanceManager,
 		DBInstanceBackupManager,
+		ElasticcacheManager,
 		VpcManager,
 		ElasticipManager,
 		NetworkInterfaceManager,
@@ -1338,4 +1375,44 @@ func (provider *SCloudprovider) GetDetailsClirc(ctx context.Context, userCred mc
 
 func (manager *SCloudproviderManager) ResourceScope() rbacutils.TRbacScope {
 	return rbacutils.ScopeDomain
+}
+
+func (provider *SCloudprovider) AllowGetDetailsStorageClasses(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+) bool {
+	return db.IsAdminAllowGetSpec(userCred, provider, "storage-classes")
+}
+
+func (provider *SCloudprovider) GetDetailsStorageClasses(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+) (jsonutils.JSONObject, error) {
+	driver, err := provider.GetProvider()
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("fail to get provider driver %s", err)
+	}
+	extId := ""
+	regionStr := jsonutils.GetAnyString(query, []string{"cloudregion", "cloudregion_id"})
+	if len(regionStr) > 0 {
+		regionObj, err := CloudregionManager.FetchByIdOrName(userCred, regionStr)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return nil, httperrors.NewResourceNotFoundError2(CloudregionManager.Keyword(), regionStr)
+			} else {
+				return nil, httperrors.NewGeneralError(err)
+			}
+		}
+		extId = regionObj.(*SCloudregion).GetExternalId()
+	}
+
+	sc := driver.GetStorageClasses(extId)
+	if sc == nil {
+		return nil, httperrors.NewInternalServerError("storage classes not supported")
+	}
+	ret := jsonutils.NewDict()
+	ret.Add(jsonutils.NewStringArray(sc), "storage_classes")
+	return ret, nil
 }

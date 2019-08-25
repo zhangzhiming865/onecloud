@@ -218,6 +218,12 @@ func (self *SInstance) GetMetadata() *jsonutils.JSONDict {
 
 	data.Add(jsonutils.NewString(self.host.zone.GetGlobalId()), "zone_ext_id")
 
+	if strings.Contains(strings.ToLower(self.OSType), "window") {
+		if loginKey, err := self.host.zone.region.getPasswordData(self.GetId()); err == nil {
+			data.Add(jsonutils.NewString(loginKey), "login_key")
+		}
+	}
+
 	// no need to sync image metadata
 	/*
 		if len(self.ImageId) > 0 {
@@ -419,11 +425,16 @@ func (self *SInstance) RebuildRoot(ctx context.Context, imageId string, passwd s
 		}
 	}
 
+	keypairName := self.KeyPairName
 	loginUser := cloudinit.NewUser(api.VM_AWS_DEFAULT_LOGIN_USER)
 	loginUser.SudoPolicy(cloudinit.USER_SUDO_NOPASSWD)
 	if len(publicKey) > 0 {
 		loginUser.SshKey(publicKey)
 		cloudconfig.MergeUser(loginUser)
+		keypairName, err = self.host.zone.region.syncKeypair(publicKey)
+		if err != nil {
+			return "", fmt.Errorf("RebuildRoot.syncKeypair %s", err)
+		}
 	} else if len(passwd) > 0 {
 		loginUser.Password(passwd)
 		cloudconfig.MergeUser(loginUser)
@@ -440,7 +451,7 @@ func (self *SInstance) RebuildRoot(ctx context.Context, imageId string, passwd s
 		}
 	}
 
-	diskId, err := self.host.zone.region.ReplaceSystemDisk(ctx, self.InstanceId, imageId, sysSizeGB, cloudconfig.UserDataBase64())
+	diskId, err := self.host.zone.region.ReplaceSystemDisk(ctx, self.InstanceId, imageId, sysSizeGB, keypairName, cloudconfig.UserDataBase64())
 	if err != nil {
 		return "", err
 	}
@@ -452,8 +463,11 @@ func (self *SInstance) DeployVM(ctx context.Context, name string, password strin
 	return self.host.zone.region.DeployVM(self.InstanceId, name, password, publicKey, deleteKeypair, description)
 }
 
-func (self *SInstance) ChangeConfig(ctx context.Context, ncpu int, vmem int) error {
-	return self.host.zone.region.ChangeVMConfig(self.ZoneId, self.InstanceId, ncpu, vmem, nil)
+func (self *SInstance) ChangeConfig(ctx context.Context, config *cloudprovider.SManagedVMChangeConfig) error {
+	if len(config.InstanceType) > 0 {
+		return self.ChangeConfig2(ctx, config.InstanceType)
+	}
+	return self.host.zone.region.ChangeVMConfig(self.ZoneId, self.InstanceId, config.Cpu, config.MemoryMB, nil)
 }
 
 func (self *SInstance) ChangeConfig2(ctx context.Context, instanceType string) error {
@@ -592,7 +606,7 @@ func (self *SRegion) GetInstances(zoneId string, ids []string, offset int, limit
 			}
 
 			host := szone.getHost()
-
+			vcpu := int(*instance.CpuOptions.CoreCount) * int(*instance.CpuOptions.ThreadsPerCore)
 			sinstance := SInstance{
 				RegionId:          self.RegionId,
 				host:              host,
@@ -600,7 +614,7 @@ func (self *SRegion) GetInstances(zoneId string, ids []string, offset int, limit
 				InstanceId:        *instance.InstanceId,
 				ImageId:           *instance.ImageId,
 				InstanceType:      *instance.InstanceType,
-				Cpu:               int(*instance.CpuOptions.CoreCount),
+				Cpu:               vcpu,
 				IoOptimized:       *instance.EbsOptimized,
 				KeyPairName:       *instance.KeyName,
 				CreationTime:      *instance.LaunchTime,
@@ -671,9 +685,10 @@ func (self *SRegion) CreateInstance(name string, imageId string, instanceType st
 	var count int64 = 1
 	// disk
 	blockDevices := []*ec2.BlockDeviceMapping{}
-	for i, disk := range disks {
+	for i := range disks {
 		var ebs ec2.EbsBlockDevice
 		var deviceName string
+		disk := disks[i]
 
 		if i == 0 {
 			var size int64
@@ -894,7 +909,7 @@ func (self *SRegion) UpdateVM(instanceId string, hostname string) error {
 	return fmt.Errorf("aws not support change hostname.")
 }
 
-func (self *SRegion) ReplaceSystemDisk(ctx context.Context, instanceId string, imageId string, sysDiskSizeGB int, userdata string) (string, error) {
+func (self *SRegion) ReplaceSystemDisk(ctx context.Context, instanceId string, imageId string, sysDiskSizeGB int, keypair string, userdata string) (string, error) {
 	instance, err := self.GetInstance(instanceId)
 	if err != nil {
 		return "", err
@@ -928,7 +943,7 @@ func (self *SRegion) ReplaceSystemDisk(ctx context.Context, instanceId string, i
 		instance.Description,
 		[]SDisk{{Size: sysDiskSizeGB, Category: rootDisk.Category}},
 		"",
-		"",
+		keypair,
 		userdata)
 	if err == nil {
 		defer self.DeleteVM(_id)
@@ -1073,6 +1088,18 @@ func (self *SRegion) deleteProtectVM(instanceId string, disableDelete bool) erro
 	}
 	_, err := self.ec2Client.ModifyInstanceAttribute(p2)
 	return err
+}
+
+func (self *SRegion) getPasswordData(instanceId string) (string, error) {
+	params := &ec2.GetPasswordDataInput{}
+	params.SetInstanceId(instanceId)
+
+	ret, err := self.ec2Client.GetPasswordData(params)
+	if err != nil {
+		return "", err
+	}
+
+	return *ret.PasswordData, nil
 }
 
 func (self *SInstance) CreateDisk(ctx context.Context, sizeMb int, uuid string, driver string) error {

@@ -97,8 +97,8 @@ func (self *SSnapshot) Delete() error {
 	return self.region.DeleteSnapshot(self.ID)
 }
 
-func (self *SSnapshot) GetSize() int32 {
-	return self.Properties.DiskSizeGB
+func (self *SSnapshot) GetSizeMb() int32 {
+	return self.Properties.DiskSizeGB * 1024
 }
 
 func (self *SRegion) DeleteSnapshot(snapshotId string) error {
@@ -180,7 +180,7 @@ func (self *SRegion) GetISnapshots() ([]cloudprovider.ICloudSnapshot, error) {
 }
 
 func (self *SSnapshot) GetDiskId() string {
-	return self.Properties.CreationData.SourceResourceID
+	return strings.ToLower(self.Properties.CreationData.SourceResourceID)
 }
 
 func (self *SSnapshot) GetDiskType() string {

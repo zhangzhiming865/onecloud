@@ -118,21 +118,21 @@ func (man *SLoadbalancerManager) ListItemFilter(ctx context.Context, q *sqlchemy
 func (man *SLoadbalancerManager) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
 	var region *SCloudregion
 	if id, _ := data.GetString("vpc"); len(id) > 0 {
-		vpc, err := db.FetchById(VpcManager, id)
+		vpc, err := db.FetchByIdOrName(VpcManager, userCred, id)
 		if err != nil {
 			return nil, fmt.Errorf("getting vpc failed")
 		}
 
 		region, _ = vpc.(*SVpc).GetRegion()
 	} else if id, _ := data.GetString("zone"); len(id) > 0 {
-		zone, err := db.FetchById(ZoneManager, id)
+		zone, err := db.FetchByIdOrName(ZoneManager, userCred, id)
 		if err != nil {
 			return nil, fmt.Errorf("getting zone failed")
 		}
 
 		region = zone.(*SZone).GetRegion()
 	} else if id, _ := data.GetString("network"); len(id) > 0 {
-		network, err := db.FetchById(NetworkManager, strings.Split(id, ",")[0])
+		network, err := db.FetchByIdOrName(NetworkManager, userCred, strings.Split(id, ",")[0])
 		if err != nil {
 			return nil, fmt.Errorf("getting network failed")
 		}
@@ -810,4 +810,19 @@ func (man *SLoadbalancerManager) InitializeData() error {
 func (manager *SLoadbalancerManager) GetResourceCount() ([]db.SProjectResourceCount, error) {
 	virts := manager.Query().IsFalse("pending_deleted")
 	return db.CalculateProjectResourceCount(virts)
+}
+
+func (manager *SLoadbalancerManager) FetchByExternalId(providerId string, extId string) (*SLoadbalancer, error) {
+	ret := []SLoadbalancer{}
+	q := manager.Query().IsFalse("pending_deleted").Equals("manager_id", providerId).Equals("external_id", extId)
+	err := db.FetchModelObjects(manager, q, &ret)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(ret) == 1 {
+		return &ret[0], nil
+	} else {
+		return nil, fmt.Errorf("loadbalancerManager.FetchByExternalId provider %s external id %s %d found", providerId, extId, len(ret))
+	}
 }

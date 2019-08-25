@@ -199,7 +199,7 @@ func (l *sLinuxRootFs) DeployFstabScripts(rootFs IDiskPartition, disks []*deploy
 	var rec string
 	var modeRwxOwner = syscall.S_IRUSR | syscall.S_IWUSR | syscall.S_IXUSR
 	var fstab = fstabutils.FSTabFile(string(fstabcont))
-	fstab.RemoveDevices(len(disks))
+	fstab = fstab.RemoveDevices(len(disks))
 
 	for i := 1; i < len(disks); i++ {
 		diskId := disks[i].DiskId
@@ -309,7 +309,7 @@ func (l *sLinuxRootFs) PrepareFsForTemplate(rootFs IDiskPartition) error {
 	if rootFs.Exists("/etc/fstab", false) {
 		fstabcont, _ := rootFs.FileGetContents("/etc/fstab", false)
 		fstab := fstabutils.FSTabFile(string(fstabcont))
-		fstab.RemoveDevices(1)
+		fstab = fstab.RemoveDevices(1)
 		cf := fstab.ToConf()
 		if err := rootFs.FilePutContents("/etc/fstab", cf, false, false); err != nil {
 			return err
@@ -548,6 +548,9 @@ func (d *sDebianLikeRootFs) DeployNetworkingScripts(rootFs IDiskPartition, nics 
 			cmds.WriteString(fmt.Sprintf("    netmask %s\n", netmask))
 			if len(nicDesc.Gateway) > 0 && nicDesc.Ip == mainIp {
 				cmds.WriteString(fmt.Sprintf("    gateway %s\n", nicDesc.Gateway))
+			}
+			if nicDesc.Mtu > 0 {
+				cmds.WriteString(fmt.Sprintf("    mtu %d\n", nicDesc.Mtu))
 			}
 			var routes = make([][]string, 0)
 			netutils2.AddNicRoutes(&routes, nicDesc, mainIp, len(nics), privatePrefixes)
@@ -871,6 +874,9 @@ func (r *sRedhatLikeRootFs) deployNetworkingScripts(rootFs IDiskPartition, nics 
 		cmds.WriteString("ONBOOT=yes\n")
 		cmds.WriteString("NM_CONTROLLED=no\n")
 		cmds.WriteString("USERCTL=no\n")
+		if nicDesc.Mtu > 0 {
+			cmds.WriteString(fmt.Sprintf("MTU=%d\n", nicDesc.Mtu))
+		}
 		if len(nicDesc.Mac) > 0 {
 			cmds.WriteString("HWADDR=")
 			cmds.WriteString(nicDesc.Mac)
@@ -1201,6 +1207,7 @@ func (l *SGentooRootFs) DeployNetworkingScripts(rootFs IDiskPartition, nics []*t
 		cmds = ""
 	)
 
+	// Ref https://wiki.gentoo.org/wiki/Netifrc
 	for _, nic := range nics {
 		nicIndex := nic.Index
 		if nic.Virtual {
@@ -1209,6 +1216,9 @@ func (l *SGentooRootFs) DeployNetworkingScripts(rootFs IDiskPartition, nics []*t
 			cmds += `"\n`
 		} else {
 			cmds += fmt.Sprintf(`config_eth%d="dhcp"\n`, nicIndex)
+		}
+		if nic.Mtu > 0 {
+			cmds += fmt.Sprintf(`mtu_eth%d="%d"\n`, nicIndex, nic.Mtu)
 		}
 	}
 	if err := rootFs.FilePutContents(fn, cmds, false, false); err != nil {
@@ -1369,12 +1379,19 @@ func (d *SCoreOsRootFs) DeployHosts(rootFs IDiskPartition, hostname, domain stri
 }
 
 func (d *SCoreOsRootFs) DeployNetworkingScripts(rootFs IDiskPartition, nics []*types.SServerNic) error {
-	cont := "[Match]\n"
-	cont += "Name=eth*\n\n"
-	cont += "[Network]\n"
-	cont += "DHCP=yes\n"
-	runtime := true
-	d.GetConfig().AddUnits("00-dhcp.network", nil, nil, &runtime, cont, "", nil)
+	for _, nic := range nics {
+		name := fmt.Sprintf("eth%d", nic.Index)
+		cont := "[Match]\n"
+		cont += "Name=" + name + "\n"
+		cont += "\n[Network]\n"
+		cont += "DHCP=yes\n"
+		if nic.Mtu > 0 {
+			cont += "\n[Link]\n"
+			cont += fmt.Sprintf("MTUBytes=%d\n", nic.Mtu)
+		}
+		runtime := true
+		d.GetConfig().AddUnits("00-dhcp-"+name+".network", nil, nil, &runtime, cont, "", nil)
+	}
 	return nil
 }
 

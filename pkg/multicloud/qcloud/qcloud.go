@@ -15,8 +15,11 @@
 package qcloud
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,12 +27,17 @@ import (
 	sdkerrors "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
 	tchttp "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/http"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
+	"github.com/tencentyun/cos-go-sdk-v5"
+	"github.com/tencentyun/cos-go-sdk-v5/debug"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
+	"yunion.io/x/pkg/util/timeutils"
 
 	api "yunion.io/x/onecloud/pkg/apis/compute"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
+	"yunion.io/x/onecloud/pkg/util/httputils"
 )
 
 const (
@@ -49,7 +57,12 @@ type SQcloudClient struct {
 	AppID        string
 	SecretID     string
 	SecretKey    string
-	iregions     []cloudprovider.ICloudRegion
+
+	ownerId   string
+	ownerName string
+
+	iregions []cloudprovider.ICloudRegion
+	ibuckets []cloudprovider.ICloudBucket
 
 	Debug bool
 }
@@ -65,7 +78,18 @@ func NewQcloudClient(providerId string, providerName string, secretID string, se
 	}
 	err := client.fetchRegions()
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "fetchRegions")
+	}
+	err = client.verifyAppId()
+	if err != nil {
+		return nil, errors.Wrap(err, "verifyAppId")
+	}
+	err = client.fetchBuckets()
+	if err != nil {
+		return nil, errors.Wrap(err, "fetchBuckets")
+	}
+	if isDebug {
+		log.Debugf("ownerID: %s ownerName: %s", client.ownerId, client.ownerName)
 	}
 	return &client, nil
 }
@@ -455,6 +479,106 @@ func (client *SQcloudClient) fetchRegions() error {
 	return nil
 }
 
+func (client *SQcloudClient) getCosClient(bucket *SBucket) (*cos.Client, error) {
+	var baseUrl *cos.BaseURL
+	if bucket != nil {
+		u, _ := url.Parse(bucket.getBucketUrl())
+		baseUrl = &cos.BaseURL{
+			BucketURL: u,
+		}
+	}
+	cosClient := cos.NewClient(
+		baseUrl,
+		&http.Client{
+			Transport: &cos.AuthorizationTransport{
+				SecretID:  client.SecretID,
+				SecretKey: client.SecretKey,
+				Transport: &debug.DebugRequestTransport{
+					RequestHeader:  client.Debug,
+					RequestBody:    client.Debug,
+					ResponseHeader: client.Debug,
+					ResponseBody:   client.Debug,
+				},
+			},
+		},
+	)
+	return cosClient, nil
+}
+
+func (self *SQcloudClient) invalidateIBuckets() {
+	self.ibuckets = nil
+}
+
+func (self *SQcloudClient) getIBuckets() ([]cloudprovider.ICloudBucket, error) {
+	if self.ibuckets == nil {
+		err := self.fetchBuckets()
+		if err != nil {
+			return nil, errors.Wrap(err, "fetchBuckets")
+		}
+	}
+	return self.ibuckets, nil
+}
+
+func (client *SQcloudClient) verifyAppId() error {
+	region, err := client.getDefaultRegion()
+	if err != nil {
+		return errors.Wrap(err, "getDefaultRegion")
+	}
+	bucket := SBucket{
+		region: region,
+		Name:   "yuniondocument",
+	}
+	cli, err := client.getCosClient(&bucket)
+	if err != nil {
+		return errors.Wrap(err, "getCosClient")
+	}
+	resp, err := cli.Bucket.Head(context.Background())
+	if resp != nil {
+		defer httputils.CloseResponse(resp.Response)
+		if resp.StatusCode < 400 || resp.StatusCode == 404 {
+			return nil
+		}
+		return errors.Error(fmt.Sprintf("invalid AppId: %d", resp.StatusCode))
+	}
+	return errors.Wrap(err, "Head")
+}
+
+func (client *SQcloudClient) fetchBuckets() error {
+	coscli, err := client.getCosClient(nil)
+	if err != nil {
+		return errors.Wrap(err, "GetCosClient")
+	}
+	s, _, err := coscli.Service.Get(context.Background())
+	if err != nil {
+		return errors.Wrap(err, "coscli.Service.Get")
+	}
+	client.ownerId = s.Owner.ID
+	client.ownerName = s.Owner.DisplayName
+
+	ret := make([]cloudprovider.ICloudBucket, 0)
+	for i := range s.Buckets {
+		bInfo := s.Buckets[i]
+		createAt, _ := timeutils.ParseTimeStr(bInfo.CreationDate)
+		name := bInfo.Name
+		// name = name[:len(name)-len(result.Owner.ID)-1]
+		name = name[:strings.LastIndexByte(name, '-')]
+		region, err := client.getIRegionByRegionId(bInfo.Region)
+		if err != nil {
+			log.Errorf("fail to find region %s", bInfo.Region)
+			continue
+		}
+		b := SBucket{
+			region:     region.(*SRegion),
+			Name:       name,
+			Location:   bInfo.Region,
+			CreateDate: createAt,
+		}
+		ret = append(ret, &b)
+	}
+	client.ibuckets = ret
+	return nil
+}
+
 func (client *SQcloudClient) GetSubAccounts() ([]cloudprovider.SSubAccount, error) {
 	err := client.fetchRegions()
 	if err != nil {
@@ -470,13 +594,27 @@ func (client *SQcloudClient) GetSubAccounts() ([]cloudprovider.SSubAccount, erro
 	return []cloudprovider.SSubAccount{subAccount}, nil
 }
 
+func (client *SQcloudClient) GetAccountId() string {
+	return client.ownerName
+}
+
 func (client *SQcloudClient) GetIRegions() []cloudprovider.ICloudRegion {
 	return client.iregions
 }
 
-func (client *SQcloudClient) getDefaultRegion() (cloudprovider.ICloudRegion, error) {
-	if len(client.iregions) > 0 {
-		return client.iregions[0], nil
+func (client *SQcloudClient) getDefaultRegion() (*SRegion, error) {
+	iregion, err := client.getIRegionByRegionId(QCLOUD_DEFAULT_REGION)
+	if err != nil {
+		return nil, errors.Wrap(err, "getIRegionByRegionId")
+	}
+	return iregion.(*SRegion), nil
+}
+
+func (client *SQcloudClient) getIRegionByRegionId(id string) (cloudprovider.ICloudRegion, error) {
+	for i := 0; i < len(client.iregions); i++ {
+		if client.iregions[i].GetId() == id {
+			return client.iregions[i], nil
+		}
 	}
 	return nil, cloudprovider.ErrNotFound
 }

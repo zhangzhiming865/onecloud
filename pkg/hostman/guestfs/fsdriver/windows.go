@@ -252,7 +252,7 @@ func (w *SWindowsRootFs) DeployNetworkingScripts(rootfs IDiskPartition, nics []*
 		"@echo off",
 		w.MakeGuestDebugCmd("netcfg step 1"),
 		"setlocal enableDelayedExpansion",
-		`for /f "delims=" %%a in (\'getmac /fo csv /nh /v\') do (`,
+		`for /f "delims=" %%a in ('getmac /fo csv /nh /v') do (`,
 		`  set line=%%a&set line=!line:"=,!`,
 		`  for /f "delims=,,, tokens=1,3" %%b in ("!line!") do (`,
 	}
@@ -261,6 +261,9 @@ func (w *SWindowsRootFs) DeployNetworkingScripts(rootfs IDiskPartition, nics []*
 		mac := snic.Mac
 		mac = strings.Replace(strings.ToUpper(mac), ":", "-", -1)
 		lines = append(lines, fmt.Sprintf(`    if "%%%%c" == "%s" (`, mac))
+		if snic.Mtu > 0 {
+			lines = append(lines, fmt.Sprintf(`      netsh interface ipv4 set subinterface "%%%%b" mtu=%d`, snic.Mtu))
+		}
 		if snic.Manual {
 			netmask := netutils2.Netlen2Mask(int(snic.Masklen))
 			cfg := fmt.Sprintf(`      netsh interface ip set address "%%%%b" static %s %s`, snic.Ip, netmask)

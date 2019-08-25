@@ -20,25 +20,28 @@ import (
 	"io"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/request"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 
+	"yunion.io/x/log"
 	"yunion.io/x/pkg/errors"
+	"yunion.io/x/s3cli"
 
 	"yunion.io/x/onecloud/pkg/cloudprovider"
-	"yunion.io/x/onecloud/pkg/multicloud/objectstore"
+	"yunion.io/x/onecloud/pkg/multicloud"
+	"yunion.io/x/onecloud/pkg/util/fileutils2"
 )
 
 type SBucket struct {
-	objectstore.SBucket
+	multicloud.SBaseBucket
+
 	region *SRegion
 
 	Name         string
-	Location     string
 	CreationDate time.Time
+	Location     string
+
+	acl cloudprovider.TBucketACLType
 }
 
 func (b *SBucket) GetProjectId() string {
@@ -69,8 +72,61 @@ func (b *SBucket) GetStorageClass() string {
 	return ""
 }
 
-func (b *SBucket) GetAcl() string {
-	return ""
+func s3ToCannedAcl(acls []*s3.Grant) cloudprovider.TBucketACLType {
+	switch {
+	case len(acls) == 1:
+		if acls[0].Grantee.URI == nil && *acls[0].Permission == s3cli.PERMISSION_FULL_CONTROL {
+			return cloudprovider.ACLPrivate
+		}
+	case len(acls) == 2:
+		for _, g := range acls {
+			if *g.Grantee.Type == s3cli.GRANTEE_TYPE_GROUP && *g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_AUTH_USERS && *g.Permission == s3cli.PERMISSION_READ {
+				return cloudprovider.ACLAuthRead
+			}
+			if *g.Grantee.Type == s3cli.GRANTEE_TYPE_GROUP && *g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_ALL_USERS && *g.Permission == s3cli.PERMISSION_READ {
+				return cloudprovider.ACLPublicRead
+			}
+		}
+	case len(acls) == 3:
+		for _, g := range acls {
+			if *g.Grantee.Type == s3cli.GRANTEE_TYPE_GROUP && *g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_ALL_USERS && *g.Permission == s3cli.PERMISSION_WRITE {
+				return cloudprovider.ACLPublicReadWrite
+			}
+		}
+	}
+	return cloudprovider.ACLUnknown
+}
+
+func (b *SBucket) GetAcl() cloudprovider.TBucketACLType {
+	acl := cloudprovider.ACLPrivate
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		log.Errorf("b.region.GetS3Client fail %s", err)
+		return acl
+	}
+	input := &s3.GetBucketAclInput{}
+	input.SetBucket(b.Name)
+	output, err := s3cli.GetBucketAcl(input)
+	if err != nil {
+		log.Errorf("s3cli.GetBucketAcl fail %s", err)
+		return acl
+	}
+	return s3ToCannedAcl(output.Grants)
+}
+
+func (b *SBucket) SetAcl(aclStr cloudprovider.TBucketACLType) error {
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		return errors.Wrap(err, "b.region.GetS3Client")
+	}
+	input := &s3.PutBucketAclInput{}
+	input.SetBucket(b.Name)
+	input.SetACL(string(aclStr))
+	_, err = s3cli.PutBucketAcl(input)
+	if err != nil {
+		return errors.Wrap(err, "PutBucketAcl")
+	}
+	return nil
 }
 
 func (b *SBucket) GetAccessUrls() []cloudprovider.SBucketAccessUrl {
@@ -78,12 +134,18 @@ func (b *SBucket) GetAccessUrls() []cloudprovider.SBucketAccessUrl {
 		{
 			Url:         fmt.Sprintf("https://%s.%s", b.Name, b.region.getS3Endpoint()),
 			Description: "bucket domain",
+			Primary:     true,
 		},
 		{
 			Url:         fmt.Sprintf("https://%s/%s", b.region.getS3Endpoint(), b.Name),
 			Description: "s3 domain",
 		},
 	}
+}
+
+func (b *SBucket) GetStats() cloudprovider.SBucketStats {
+	stats, _ := cloudprovider.GetIBucketStats(b)
+	return stats
 }
 
 func (b *SBucket) ListObjects(prefix string, marker string, delimiter string, maxCount int) (cloudprovider.SListObjectResult, error) {
@@ -147,30 +209,126 @@ func (b *SBucket) GetIObjects(prefix string, isRecursive bool) ([]cloudprovider.
 	return cloudprovider.GetIObjects(b, prefix, isRecursive)
 }
 
-func (b *SBucket) PutObject(ctx context.Context, key string, reader io.Reader, contType string, storageClassStr string) error {
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(b.region.GetId())})
+func (b *SBucket) PutObject(ctx context.Context, key string, body io.Reader, sizeBytes int64, contType string, cannedAcl cloudprovider.TBucketACLType, storageClassStr string) error {
+	if sizeBytes < 0 {
+		return errors.Error("content length expected")
+	}
+	s3cli, err := b.region.GetS3Client()
 	if err != nil {
-		return errors.Wrap(err, "session.NewSession")
+		return errors.Wrap(err, "GetS3Client")
 	}
-
-	svc := s3manager.NewUploader(sess)
-	input := &s3manager.UploadInput{
-		Bucket: aws.String(b.Name),
-		Key:    aws.String(key),
-		Body:   reader,
+	input := &s3.PutObjectInput{}
+	input.SetBucket(b.Name)
+	input.SetKey(key)
+	seeker, err := fileutils2.NewReadSeeker(body, sizeBytes)
+	if err != nil {
+		return errors.Wrap(err, "newFakeSeeker")
 	}
+	defer seeker.Close()
+	input.SetBody(seeker)
+	input.SetContentLength(sizeBytes)
 	if len(contType) > 0 {
-		input.ContentType = aws.String(contType)
+		input.SetContentType(contType)
+	}
+	if len(cannedAcl) > 0 {
+		input.SetACL(string(cannedAcl))
 	}
 	if len(storageClassStr) > 0 {
-		input.StorageClass = aws.String(storageClassStr)
+		input.SetStorageClass(storageClassStr)
 	}
-
-	_, err = svc.Upload(input)
+	_, err = s3cli.PutObjectWithContext(ctx, input)
 	if err != nil {
-		return errors.Wrap(err, "svc.Upload")
+		return errors.Wrap(err, "PutObjectWithContext")
 	}
+	return nil
+}
 
+func (b *SBucket) NewMultipartUpload(ctx context.Context, key string, contType string, cannedAcl cloudprovider.TBucketACLType, storageClassStr string) (string, error) {
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		return "", errors.Wrap(err, "GetS3Client")
+	}
+	input := &s3.CreateMultipartUploadInput{}
+	input.SetBucket(b.Name)
+	input.SetKey(key)
+	if len(contType) > 0 {
+		input.SetContentType(contType)
+	}
+	if len(cannedAcl) > 0 {
+		input.SetACL(string(cannedAcl))
+	}
+	if len(storageClassStr) > 0 {
+		input.SetStorageClass(storageClassStr)
+	}
+	output, err := s3cli.CreateMultipartUploadWithContext(ctx, input)
+	if err != nil {
+		return "", errors.Wrap(err, "CreateMultipartUpload")
+	}
+	return *output.UploadId, nil
+}
+
+func (b *SBucket) UploadPart(ctx context.Context, key string, uploadId string, partIndex int, part io.Reader, partSize int64) (string, error) {
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		return "", errors.Wrap(err, "GetS3Client")
+	}
+	input := &s3.UploadPartInput{}
+	input.SetBucket(b.Name)
+	input.SetKey(key)
+	input.SetUploadId(uploadId)
+	input.SetPartNumber(int64(partIndex))
+	seeker, err := fileutils2.NewReadSeeker(part, partSize)
+	if err != nil {
+		return "", errors.Wrap(err, "newFakeSeeker")
+	}
+	defer seeker.Close()
+	input.SetBody(seeker)
+	input.SetContentLength(partSize)
+	output, err := s3cli.UploadPartWithContext(ctx, input)
+	if err != nil {
+		return "", errors.Wrap(err, "UploadPartWithContext")
+	}
+	return *output.ETag, nil
+}
+
+func (b *SBucket) CompleteMultipartUpload(ctx context.Context, key string, uploadId string, partEtags []string) error {
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		return errors.Wrap(err, "GetS3Client")
+	}
+	input := &s3.CompleteMultipartUploadInput{}
+	input.SetBucket(b.Name)
+	input.SetKey(key)
+	input.SetUploadId(uploadId)
+	uploads := &s3.CompletedMultipartUpload{}
+	parts := make([]*s3.CompletedPart, len(partEtags))
+	for i := range partEtags {
+		parts[i] = &s3.CompletedPart{}
+		parts[i].SetPartNumber(int64(i + 1))
+		parts[i].SetETag(partEtags[i])
+	}
+	uploads.SetParts(parts)
+	input.SetMultipartUpload(uploads)
+	_, err = s3cli.CompleteMultipartUploadWithContext(ctx, input)
+	if err != nil {
+		return errors.Wrap(err, "CompleteMultipartUploadWithContext")
+	}
+	return nil
+}
+
+func (b *SBucket) AbortMultipartUpload(ctx context.Context, key string, uploadId string) error {
+	s3cli, err := b.region.GetS3Client()
+	if err != nil {
+		return errors.Wrap(err, "GetS3Client")
+	}
+	input := &s3.AbortMultipartUploadInput{}
+	input.SetBucket(b.Name)
+	input.SetKey(key)
+	input.SetUploadId(uploadId)
+	_, err = s3cli.AbortMultipartUploadWithContext(ctx, input)
+	if err != nil {
+		return errors.Wrap(err, "AbortMultipartUploadWithContext")
+	}
 	return nil
 }
 
@@ -214,5 +372,9 @@ func (b *SBucket) GetTempUrl(method string, key string, expire time.Duration) (s
 	default:
 		return "", errors.Error("unsupported method")
 	}
-	return request.Presign(expire)
+	url, _, err := request.PresignRequest(expire)
+	if err != nil {
+		return "", errors.Wrap(err, "request.PresignRequest")
+	}
+	return url, nil
 }

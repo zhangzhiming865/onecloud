@@ -36,6 +36,7 @@ type Client struct {
 	Disks              *modules.SDiskManager
 	Domains            *modules.SDomainManager
 	Eips               *modules.SEipManager
+	Elasticcache       *modules.SElasticcacheManager
 	Flavors            *modules.SFlavorManager
 	Images             *modules.SImageManager
 	OpenStackImages    *modules.SImageManager
@@ -71,6 +72,8 @@ type Client struct {
 	SNatRules          *modules.SNatSRuleManager
 	DNatRules          *modules.SNatDRuleManager
 	NatGateways        *modules.SNatGatewayManager
+	DBInstance         *modules.SDBInstanceManager
+	DBInstanceBackup   *modules.SDBInstanceBackupManager
 }
 
 func (self *Client) Init() error {
@@ -118,6 +121,7 @@ func (self *Client) initManagers() {
 		self.Zones = modules.NewZoneManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.Vpcs = modules.NewVpcManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.Eips = modules.NewEipManager(self.regionId, self.projectId, self.signer, self.debug)
+		self.Elasticcache = modules.NewElasticcacheManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.Disks = modules.NewDiskManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.Domains = modules.NewDomainManager(self.signer, self.debug)
 		self.Keypairs = modules.NewKeypairManager(self.regionId, self.projectId, self.signer, self.debug)
@@ -146,6 +150,8 @@ func (self *Client) initManagers() {
 		self.SNatRules = modules.NewNatSManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.DNatRules = modules.NewNatDManager(self.regionId, self.projectId, self.signer, self.debug)
 		self.NatGateways = modules.NewNatGatewayManager(self.regionId, self.projectId, self.signer, self.debug)
+		self.DBInstance = modules.NewDBInstanceManager(self.regionId, self.projectId, self.signer, self.debug)
+		self.DBInstanceBackup = modules.NewDBInstanceBackupManager(self.regionId, self.projectId, self.signer, self.debug)
 	}
 
 	self.init = true

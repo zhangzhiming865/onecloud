@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	"yunion.io/x/onecloud/pkg/httperrors"
 	"yunion.io/x/onecloud/pkg/mcclient"
 	"yunion.io/x/onecloud/pkg/mcclient/modules"
+	"yunion.io/x/onecloud/pkg/util/rbacutils"
 )
 
 type SBucketManager struct {
@@ -70,6 +72,14 @@ type SBucket struct {
 	StorageClass string `width:"36" charset:"ascii" nullable:"false" list:"user"`
 	Location     string `width:"36" charset:"ascii" nullable:"false" list:"user"`
 	Acl          string `width:"36" charset:"ascii" nullable:"false" list:"user"`
+
+	SizeBytes int64 `nullable:"false" default:"0" list:"user"`
+	ObjectCnt int   `nullable:"false" default:"0" list:"user"`
+
+	SizeBytesLimit int64 `nullable:"false" default:"0" list:"user"`
+	ObjectCntLimit int   `nullable:"false" default:"0" list:"user"`
+
+	AccessUrls jsonutils.JSONObject `nullable:"true" list:"user"`
 }
 
 func (manager *SBucketManager) SetHandlerProcessTimeout(info *appsrv.SHandlerInfo, r *http.Request) time.Duration {
@@ -128,7 +138,7 @@ func (manager *SBucketManager) syncBuckets(ctx context.Context, userCred mcclien
 		}
 	}
 	for i := 0; i < len(commondb); i += 1 {
-		err = commondb[i].syncWithCloudBucket(ctx, userCred, commonext[i], provider)
+		err = commondb[i].syncWithCloudBucket(ctx, userCred, commonext[i], provider, false)
 		if err != nil {
 			syncResult.UpdateError(err)
 		} else {
@@ -176,7 +186,17 @@ func (manager *SBucketManager) newFromCloudBucket(
 
 	bucket.Location = extBucket.GetLocation()
 	bucket.StorageClass = extBucket.GetStorageClass()
-	// bucket.Acl = extBucket.GetAcl()
+	bucket.Acl = string(extBucket.GetAcl())
+
+	stats := extBucket.GetStats()
+	bucket.SizeBytes = stats.SizeBytes
+	bucket.ObjectCnt = stats.ObjectCount
+
+	limit := extBucket.GetLimit()
+	bucket.SizeBytesLimit = limit.SizeBytes
+	bucket.ObjectCntLimit = limit.ObjectCount
+
+	bucket.AccessUrls = jsonutils.Marshal(extBucket.GetAccessUrls())
 
 	bucket.IsEmulated = false
 
@@ -192,18 +212,54 @@ func (manager *SBucketManager) newFromCloudBucket(
 	return &bucket, nil
 }
 
+func (bucket *SBucket) getStats() cloudprovider.SBucketStats {
+	return cloudprovider.SBucketStats{
+		SizeBytes:   bucket.SizeBytes,
+		ObjectCount: bucket.ObjectCnt,
+	}
+}
+
+func (bucket *SBucket) GetShortDesc(ctx context.Context) *jsonutils.JSONDict {
+	desc := bucket.SVirtualResourceBase.GetShortDesc(ctx)
+
+	desc.Add(jsonutils.NewInt(bucket.SizeBytes), "size_bytes")
+	desc.Add(jsonutils.NewInt(int64(bucket.ObjectCnt)), "object_cnt")
+	desc.Add(jsonutils.NewString(bucket.Acl), "acl")
+	desc.Add(jsonutils.NewString(bucket.StorageClass), "storage_class")
+
+	info := bucket.getCloudProviderInfo()
+	desc.Update(jsonutils.Marshal(&info))
+
+	return desc
+}
+
 func (bucket *SBucket) syncWithCloudBucket(
 	ctx context.Context,
 	userCred mcclient.TokenCredential,
 	extBucket cloudprovider.ICloudBucket,
 	provider *SCloudprovider,
+	statsOnly bool,
 ) error {
+	oStats := bucket.getStats()
 	diff, err := db.UpdateWithLock(ctx, bucket, func() error {
-		// bucket.Acl = extBucket.GetAcl()
-		bucket.Location = extBucket.GetLocation()
-		bucket.StorageClass = extBucket.GetStorageClass()
+		stats := extBucket.GetStats()
+		bucket.SizeBytes = stats.SizeBytes
+		bucket.ObjectCnt = stats.ObjectCount
 
-		bucket.Status = api.BUCKET_STATUS_READY
+		if !statsOnly {
+			limit := extBucket.GetLimit()
+			bucket.SizeBytesLimit = limit.SizeBytes
+			bucket.ObjectCntLimit = limit.ObjectCount
+
+			bucket.Acl = string(extBucket.GetAcl())
+			bucket.Location = extBucket.GetLocation()
+			bucket.StorageClass = extBucket.GetStorageClass()
+
+			bucket.AccessUrls = jsonutils.Marshal(extBucket.GetAccessUrls())
+
+			bucket.Status = api.BUCKET_STATUS_READY
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -211,6 +267,10 @@ func (bucket *SBucket) syncWithCloudBucket(
 	}
 
 	db.OpsLog.LogSyncUpdate(bucket, diff, userCred)
+
+	if !oStats.Equals(extBucket.GetStats()) {
+		db.OpsLog.LogEvent(bucket, api.BUCKET_OPS_STATS_CHANGE, bucket.GetShortDesc(ctx), userCred)
+	}
 
 	if provider != nil {
 		SyncCloudProject(userCred, bucket, provider.GetOwnerId(), extBucket, provider.Id)
@@ -244,15 +304,17 @@ func (bucket *SBucket) RealDelete(ctx context.Context, userCred mcclient.TokenCr
 }
 
 func (bucket *SBucket) RemoteDelete(ctx context.Context, userCred mcclient.TokenCredential) error {
-	iregion, err := bucket.GetIRegion()
-	if err != nil {
-		return errors.Wrap(err, "bucket.GetIRegion")
+	if len(bucket.ExternalId) > 0 {
+		iregion, err := bucket.GetIRegion()
+		if err != nil {
+			return errors.Wrap(err, "bucket.GetIRegion")
+		}
+		err = iregion.DeleteIBucket(bucket.ExternalId)
+		if err != nil {
+			return errors.Wrap(err, "iregion.DeleteIBucket")
+		}
 	}
-	err = iregion.DeleteIBucket(bucket.ExternalId)
-	if err != nil {
-		return errors.Wrap(err, "iregion.DeleteIBucket")
-	}
-	err = bucket.RealDelete(ctx, userCred)
+	err := bucket.RealDelete(ctx, userCred)
 	if err != nil {
 		return errors.Wrap(err, "bucket.RealDelete")
 	}
@@ -318,9 +380,11 @@ func (manager *SBucketManager) ValidateCreateData(
 	query jsonutils.JSONObject,
 	data *jsonutils.JSONDict,
 ) (*jsonutils.JSONDict, error) {
+	cloudRegionV := validators.NewModelIdOrNameValidator("cloudregion", CloudregionManager.Keyword(), ownerId)
+	managerV := validators.NewModelIdOrNameValidator("manager", CloudproviderManager.Keyword(), ownerId)
 	for _, v := range []validators.IValidator{
-		validators.NewModelIdOrNameValidator("cloudregion", CloudregionManager.Keyword(), ownerId),
-		validators.NewModelIdOrNameValidator("manager", CloudproviderManager.Keyword(), ownerId),
+		cloudRegionV,
+		managerV,
 	} {
 		err := v.Validate(data)
 		if err != nil {
@@ -335,6 +399,14 @@ func (manager *SBucketManager) ValidateCreateData(
 	if err != nil {
 		return nil, httperrors.NewInputParameterError("invalid bucket name: %s", err)
 	}
+
+	cloudprovider := managerV.Model.(*SCloudprovider)
+	quotaPlatformId := cloudprovider.GetQuotaPlatformID()
+	pendingUsage := SQuota{Bucket: 1}
+	if err := QuotaManager.CheckSetPendingQuota(ctx, userCred, rbacutils.ScopeProject, ownerId, quotaPlatformId, &pendingUsage); err != nil {
+		return nil, httperrors.NewOutOfQuotaError("%s", err)
+	}
+
 	return manager.SVirtualResourceBaseManager.ValidateCreateData(ctx, userCred, ownerId, query, data)
 }
 
@@ -345,6 +417,14 @@ func (bucket *SBucket) PostCreate(
 	query jsonutils.JSONObject,
 	data jsonutils.JSONObject,
 ) {
+	cloudprovider := bucket.GetCloudprovider()
+	quotaPlatformId := cloudprovider.GetQuotaPlatformID()
+	pendingUsage := SQuota{Bucket: 1}
+	err := QuotaManager.CancelPendingUsage(ctx, userCred, rbacutils.ScopeProject, ownerId, quotaPlatformId, &pendingUsage, &pendingUsage)
+	if err != nil {
+		log.Errorf("CancelPendingUsage error %s", err)
+	}
+
 	bucket.SetStatus(userCred, api.BUCKET_STATUS_START_CREATE, "PostCreate")
 	task, err := taskman.TaskManager.NewTask(ctx, "BucketCreateTask", bucket, userCred, nil, "", "", nil)
 	if err != nil {
@@ -379,15 +459,15 @@ func (bucket *SBucket) RemoteCreate(ctx context.Context, userCred mcclient.Token
 	if err != nil {
 		return errors.Wrap(err, "iregion.CreateIBucket")
 	}
-	err = db.SetExternalId(bucket, userCred, bucket.Name)
-	if err != nil {
-		return errors.Wrap(err, "db.SetExternalId")
-	}
-	extBucket, err := iregion.GetIBucketById(bucket.Name)
+	extBucket, err := iregion.GetIBucketByName(bucket.Name)
 	if err != nil {
 		return errors.Wrap(err, "iregion.GetIBucketByName")
 	}
-	err = bucket.syncWithCloudBucket(ctx, userCred, extBucket, nil)
+	err = db.SetExternalId(bucket, userCred, extBucket.GetGlobalId())
+	if err != nil {
+		return errors.Wrap(err, "db.SetExternalId")
+	}
+	err = bucket.syncWithCloudBucket(ctx, userCred, extBucket, nil, false)
 	if err != nil {
 		return errors.Wrap(err, "bucket.syncWithCloudBucket")
 	}
@@ -439,6 +519,26 @@ func (manager *SBucketManager) ListItemFilter(ctx context.Context, q *sqlchemy.S
 		return nil, err
 	}
 
+	return q, nil
+}
+
+func (manager *SBucketManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field string) (*sqlchemy.SQuery, error) {
+	switch field {
+	case "tenant":
+		tenantCacheQuery := db.TenantCacheManager.Query("name", "id").Distinct().SubQuery()
+		q.AppendField(tenantCacheQuery.Field("name", "tenant"))
+		q = q.Join(tenantCacheQuery, sqlchemy.Equals(q.Field("tenant_id"), tenantCacheQuery.Field("id")))
+		q.GroupBy(tenantCacheQuery.Field("name"))
+	case "account":
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query("name", "id").Distinct().SubQuery()
+		q = q.Join(cloudproviders, sqlchemy.Equals(q.Field("manager_id"), cloudproviders.Field("id")))
+		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
+		q.GroupBy(cloudaccounts.Field("name"))
+		q.AppendField(cloudaccounts.Field("name", "account"))
+	default:
+		return nil, httperrors.NewBadRequestError("unsupport field %s", field)
+	}
 	return q, nil
 }
 
@@ -530,12 +630,17 @@ func (bucket *SBucket) PerformMakedir(
 	data jsonutils.JSONObject,
 ) (jsonutils.JSONObject, error) {
 	key, _ := data.GetString("key")
-	if key[len(key)-1] != '/' {
-		return nil, httperrors.NewInputParameterError("directory must ends with /")
+	for len(key) > 0 && key[len(key)-1] == '/' {
+		key = key[:len(key)-1]
 	}
+
+	if len(key) == 0 {
+		return nil, httperrors.NewInputParameterError("empty directory name")
+	}
+
 	err := s3utils.CheckValidObjectName(key)
 	if err != nil {
-		return nil, httperrors.NewInputParameterError("invalid key: %s", err)
+		return nil, httperrors.NewInputParameterError("invalid key %s: %s", key, err)
 	}
 
 	iBucket, err := bucket.GetIBucket()
@@ -543,7 +648,7 @@ func (bucket *SBucket) PerformMakedir(
 		return nil, httperrors.NewInternalServerError("fail to find external bucket: %s", err)
 	}
 
-	err = cloudprovider.Makedir(ctx, iBucket, key)
+	err = cloudprovider.Makedir(ctx, iBucket, key+"/")
 	if err != nil {
 		return nil, httperrors.NewInternalServerError("fail to mkdir: %s", err)
 	}
@@ -580,13 +685,20 @@ func (bucket *SBucket) PerformDelete(
 	}
 	ok := jsonutils.NewDict()
 	results := modules.BatchDo(keyStrs, func(key string) (jsonutils.JSONObject, error) {
-		err := iBucket.DeleteObject(ctx, key)
+		if strings.HasSuffix(key, "/") {
+			err = cloudprovider.DeletePrefix(ctx, iBucket, key)
+		} else {
+			err = iBucket.DeleteObject(ctx, key)
+		}
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "DeletePrefix")
 		} else {
 			return ok, nil
 		}
 	})
+
+	bucket.syncWithCloudBucket(ctx, userCred, iBucket, nil, true)
+
 	return modules.SubmitResults2JSON(results), nil
 }
 
@@ -607,6 +719,11 @@ func (bucket *SBucket) PerformUpload(
 	appParams := appsrv.AppContextGetParams(ctx)
 
 	key := appParams.Request.Header.Get(api.BUCKET_UPLOAD_OBJECT_KEY_HEADER)
+
+	if strings.HasSuffix(key, "/") {
+		return nil, httperrors.NewInputParameterError("object key should not ends with /")
+	}
+
 	err := s3utils.CheckValidObjectName(key)
 	if err != nil {
 		return nil, httperrors.NewInputParameterError("invalid object key: %s", err)
@@ -618,11 +735,319 @@ func (bucket *SBucket) PerformUpload(
 	}
 
 	contType := appParams.Request.Header.Get("Content-Type")
+	sizeStr := appParams.Request.Header.Get("Content-Length")
+	if len(sizeStr) == 0 {
+		return nil, httperrors.NewInputParameterError("missing Content-Length")
+	}
+	sizeBytes, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil {
+		return nil, httperrors.NewInputParameterError("Illegal Content-Length %s", sizeStr)
+	}
+	if sizeBytes < 0 {
+		return nil, httperrors.NewInputParameterError("Content-Length negative %d", sizeBytes)
+	}
 	storageClass := appParams.Request.Header.Get(api.BUCKET_UPLOAD_OBJECT_STORAGECLASS_HEADER)
-	err = iBucket.PutObject(ctx, key, appParams.Request.Body, contType, storageClass)
+	aclStr := appParams.Request.Header.Get(api.BUCKET_UPLOAD_OBJECT_ACL_HEADER)
+	if len(aclStr) > 0 {
+		switch cloudprovider.TBucketACLType(aclStr) {
+		case cloudprovider.ACLPrivate, cloudprovider.ACLAuthRead, cloudprovider.ACLPublicRead, cloudprovider.ACLPublicReadWrite:
+			// do nothing
+		default:
+			return nil, httperrors.NewInputParameterError("invalid acl: %s", aclStr)
+		}
+	}
+
+	inc := cloudprovider.SBucketStats{}
+	obj, err := cloudprovider.GetIObject(iBucket, key)
+	if err == nil {
+		// replace
+		inc.SizeBytes = sizeBytes - obj.GetSizeBytes()
+		if inc.SizeBytes < 0 {
+			inc.SizeBytes = 0
+		}
+	} else if err == cloudprovider.ErrNotFound {
+		// new upload
+		inc.SizeBytes = sizeBytes
+		inc.ObjectCount = 1
+	} else {
+		return nil, httperrors.NewInternalServerError("GetIObject error %s", err)
+	}
+
+	if bucket.SizeBytesLimit > 0 && inc.SizeBytes > 0 && bucket.SizeBytesLimit < bucket.SizeBytes+inc.SizeBytes {
+		return nil, httperrors.NewOutOfQuotaError("object size limit exceeds")
+	}
+	if bucket.ObjectCntLimit > 0 && inc.ObjectCount > 0 && bucket.ObjectCntLimit < bucket.ObjectCnt+inc.ObjectCount {
+		return nil, httperrors.NewOutOfQuotaError("object count limit exceeds")
+	}
+
+	manager := bucket.GetCloudprovider()
+	quotaPlatformId := manager.GetQuotaPlatformID()
+	pendingUsage := SQuota{ObjectGB: int(inc.SizeBytes / 1000 / 1000 / 1000), ObjectCnt: inc.ObjectCount}
+	if !pendingUsage.IsEmpty() {
+		if err := QuotaManager.CheckSetPendingQuota(ctx, userCred, rbacutils.ScopeProject, bucket.GetOwnerId(), quotaPlatformId, &pendingUsage); err != nil {
+			return nil, httperrors.NewOutOfQuotaError("%s", err)
+		}
+	}
+
+	err = cloudprovider.UploadObject(ctx, iBucket, key, 0, appParams.Request.Body, sizeBytes, contType, cloudprovider.TBucketACLType(aclStr), storageClass, false)
 	if err != nil {
 		return nil, httperrors.NewInternalServerError("put object error %s", err)
 	}
+
+	bucket.syncWithCloudBucket(ctx, userCred, iBucket, nil, true)
+
+	if !pendingUsage.IsEmpty() {
+		QuotaManager.CancelPendingUsage(ctx, userCred, rbacutils.ScopeProject, bucket.GetOwnerId(), quotaPlatformId, &pendingUsage, &pendingUsage)
+	}
+
+	return nil, nil
+}
+
+func (bucket *SBucket) AllowPerformAcl(ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) bool {
+	return bucket.IsOwner(userCred)
+}
+
+func (bucket *SBucket) PerformAcl(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) (jsonutils.JSONObject, error) {
+	aclStr, _ := data.GetString("acl")
+	objKey, _ := data.GetString("key")
+	switch cloudprovider.TBucketACLType(aclStr) {
+	case cloudprovider.ACLPrivate, cloudprovider.ACLAuthRead, cloudprovider.ACLPublicRead, cloudprovider.ACLPublicReadWrite:
+		// do nothing
+	default:
+		return nil, httperrors.NewInputParameterError("invalid acl: %s", aclStr)
+	}
+
+	iBucket, err := bucket.GetIBucket()
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("fail to find external bucket: %s", err)
+	}
+
+	if len(objKey) == 0 {
+		err = iBucket.SetAcl(cloudprovider.TBucketACLType(aclStr))
+		if err != nil {
+			return nil, httperrors.NewInternalServerError("setAcl error %s", err)
+		}
+
+		err = bucket.syncWithCloudBucket(ctx, userCred, iBucket, nil, false)
+		if err != nil {
+			return nil, httperrors.NewInternalServerError("syncWithCloudBucket error %s", err)
+		}
+	} else {
+		object, err := cloudprovider.GetIObject(iBucket, objKey)
+		if err != nil {
+			if err == cloudprovider.ErrNotFound {
+				return nil, httperrors.NewResourceNotFoundError("object %s not found", objKey)
+			} else {
+				return nil, httperrors.NewInternalServerError("iBucket.GetIObjects error %s", err)
+			}
+		}
+		err = object.SetAcl(cloudprovider.TBucketACLType(aclStr))
+		if err != nil {
+			return nil, httperrors.NewInternalServerError("setAcl error %s", err)
+		}
+	}
+
+	return nil, nil
+}
+
+func (bucket *SBucket) AllowPerformSync(ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) bool {
+	return bucket.IsOwner(userCred)
+}
+
+func (bucket *SBucket) PerformSync(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) (jsonutils.JSONObject, error) {
+	statsOnly := jsonutils.QueryBoolean(data, "stats_only", false)
+
+	iBucket, err := bucket.GetIBucket()
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("fail to find external bucket: %s", err)
+	}
+
+	err = bucket.syncWithCloudBucket(ctx, userCred, iBucket, nil, statsOnly)
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("syncWithCloudBucket error %s", err)
+	}
+
+	return nil, nil
+}
+
+func (bucket *SBucket) ValidatePurgeCondition(ctx context.Context) error {
+	return bucket.SVirtualResourceBase.ValidateDeleteCondition(ctx)
+}
+
+func (bucket *SBucket) ValidateDeleteCondition(ctx context.Context) error {
+	if bucket.ObjectCnt > 0 {
+		return httperrors.NewNotEmptyError("not an empty bucket")
+	}
+	return bucket.ValidatePurgeCondition(ctx)
+}
+
+func (bucket *SBucket) AllowGetDetailsAcl(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+) bool {
+	return bucket.IsOwner(userCred)
+}
+
+func (bucket *SBucket) GetDetailsAcl(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+) (jsonutils.JSONObject, error) {
+	iBucket, err := bucket.GetIBucket()
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("fail to find external bucket: %s", err)
+	}
+	objKey, _ := query.GetString("key")
+	var acl cloudprovider.TBucketACLType
+	if len(objKey) == 0 {
+		acl = iBucket.GetAcl()
+	} else {
+		object, err := cloudprovider.GetIObject(iBucket, objKey)
+		if err != nil {
+			if err == cloudprovider.ErrNotFound {
+				return nil, httperrors.NewNotFoundError("object %s not found", objKey)
+			} else {
+				return nil, httperrors.NewInternalServerError("iBucket.GetIObjects error %s", err)
+			}
+		}
+		acl = object.GetAcl()
+	}
+	ret := jsonutils.NewDict()
+	ret.Add(jsonutils.NewString(string(acl)), "acl")
+	return ret, nil
+}
+
+func (manager *SBucketManager) usageQByCloudEnv(q *sqlchemy.SQuery, providers []string, brands []string, cloudEnv string) *sqlchemy.SQuery {
+	return CloudProviderFilter(q, q.Field("manager_id"), providers, brands, cloudEnv)
+}
+
+func (manager *SBucketManager) usageQByRange(q *sqlchemy.SQuery, rangeObj db.IStandaloneModel) *sqlchemy.SQuery {
+	if rangeObj == nil {
+		return q
+	}
+
+	kw := rangeObj.Keyword()
+	switch kw {
+	case "zone":
+		zone := rangeObj.(*SZone)
+		q = q.Filter(sqlchemy.Equals(q.Field("cloudregion_id"), zone.CloudregionId))
+	case "wire":
+		wire := rangeObj.(*SWire)
+		zone := wire.GetZone()
+		q = q.Filter(sqlchemy.Equals(q.Field("cloudregion_id"), zone.CloudregionId))
+	case "host":
+		host := rangeObj.(*SHost)
+		zone := host.GetZone()
+		q = q.Filter(sqlchemy.Equals(q.Field("cloudregion_id"), zone.CloudregionId))
+	case "cloudprovider":
+		q = q.Filter(sqlchemy.Equals(q.Field("manager_id"), rangeObj.GetId()))
+	case "cloudaccount":
+		cloudproviders := CloudproviderManager.Query().SubQuery()
+		subq := cloudproviders.Query(cloudproviders.Field("id")).Equals("cloudaccount_id", rangeObj.GetId()).SubQuery()
+		q = q.Filter(sqlchemy.In(q.Field("manager_id"), subq))
+	case "cloudregion":
+		q = q.Filter(sqlchemy.Equals(q.Field("cloudregion_id"), rangeObj.GetId()))
+	}
+
+	return q
+}
+
+func (manager *SBucketManager) usageQ(q *sqlchemy.SQuery, rangeObj db.IStandaloneModel, providers []string, brands []string, cloudEnv string) *sqlchemy.SQuery {
+	q = manager.usageQByRange(q, rangeObj)
+	q = manager.usageQByCloudEnv(q, providers, brands, cloudEnv)
+	return q
+}
+
+type SBucketUsages struct {
+	Buckets int
+	Objects int
+	Bytes   int64
+}
+
+func (manager *SBucketManager) TotalCount(scope rbacutils.TRbacScope, ownerId mcclient.IIdentityProvider, rangeObj db.IStandaloneModel, providers []string, brands []string, cloudEnv string) SBucketUsages {
+	usage := SBucketUsages{}
+	buckets := manager.Query().SubQuery()
+	q := buckets.Query(
+		sqlchemy.COUNT("buckets"),
+		sqlchemy.SUM("objects", buckets.Field("object_cnt")),
+		sqlchemy.SUM("bytes", buckets.Field("size_bytes")),
+	)
+	q = manager.usageQ(q, rangeObj, providers, brands, cloudEnv)
+	switch scope {
+	case rbacutils.ScopeSystem:
+		// do nothing
+	case rbacutils.ScopeDomain:
+		q = q.Equals("domain_id", ownerId.GetProjectDomainId())
+	case rbacutils.ScopeProject:
+		q = q.Equals("tenant_id", ownerId.GetProjectId())
+	}
+	err := q.First(&usage)
+	if err != nil {
+		log.Errorf("Query bucket usage error %s", err)
+	}
+	return usage
+}
+
+func (bucket *SBucket) AllowPerformLimit(ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) bool {
+	return bucket.IsOwner(userCred)
+}
+
+func (bucket *SBucket) PerformLimit(
+	ctx context.Context,
+	userCred mcclient.TokenCredential,
+	query jsonutils.JSONObject,
+	data jsonutils.JSONObject,
+) (jsonutils.JSONObject, error) {
+	limit := cloudprovider.SBucketStats{}
+	err := data.Unmarshal(&limit, "limit")
+	if err != nil {
+		return nil, httperrors.NewInputParameterError("unmarshal limit error %s", err)
+	}
+
+	iBucket, err := bucket.GetIBucket()
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("fail to find external bucket: %s", err)
+	}
+
+	err = iBucket.SetLimit(limit)
+	if err != nil && err != cloudprovider.ErrNotSupported {
+		return nil, httperrors.NewInternalServerError("SetLimit error %s", err)
+	}
+
+	diff, err := db.Update(bucket, func() error {
+		bucket.SizeBytesLimit = limit.SizeBytes
+		bucket.ObjectCntLimit = limit.ObjectCount
+		return nil
+	})
+
+	if err != nil {
+		return nil, httperrors.NewInternalServerError("Update error %s", err)
+	}
+
+	db.OpsLog.LogEvent(bucket, db.ACT_UPDATE, diff, userCred)
 
 	return nil, nil
 }

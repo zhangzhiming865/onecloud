@@ -22,11 +22,13 @@ import (
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
+	"yunion.io/x/onecloud/pkg/multicloud"
 
 	api "yunion.io/x/onecloud/pkg/apis/compute"
 )
 
 type SHost struct {
+	multicloud.SHostBase
 	zone *SZone
 
 	ZStackBasic
@@ -169,7 +171,10 @@ func (host *SHost) Refresh() error {
 }
 
 func (host *SHost) GetHostStatus() string {
-	return api.HOST_ONLINE
+	if host.Status == "Connected" {
+		return api.HOST_ONLINE
+	}
+	return api.HOST_OFFLINE
 }
 
 func (host *SHost) GetEnabled() bool {
@@ -366,7 +371,14 @@ func (region *SRegion) _createVM(desc *cloudprovider.SManagedVMCreateConfig, zon
 	if len(desc.InstanceType) > 0 {
 		offering, err := region.GetInstanceOfferingByType(desc.InstanceType)
 		if err != nil {
-			return nil, err
+			if err == cloudprovider.ErrNotFound {
+				offering, err = region.CreateInstanceOffering(desc.InstanceType, desc.Cpu, desc.MemoryMB, "UserVm")
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				return nil, err
+			}
 		}
 		offerings[offering.Name] = offering.UUID
 	} else {

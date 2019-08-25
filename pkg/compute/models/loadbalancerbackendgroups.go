@@ -21,6 +21,7 @@ import (
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/util/compare"
 	"yunion.io/x/sqlchemy"
 
@@ -181,6 +182,16 @@ func (man *SLoadbalancerBackendGroupManager) ValidateCreateData(ctx context.Cont
 		return nil, httperrors.NewResourceNotFoundError("failed to find region for loadbalancer %s", lb.Name)
 	}
 	return region.GetDriver().ValidateCreateLoadbalancerBackendGroupData(ctx, userCred, data, lb, backends)
+}
+
+func (lbbg *SLoadbalancerBackendGroup) GetLoadbalancerListenerRules() ([]SLoadbalancerListenerRule, error) {
+	q := LoadbalancerListenerRuleManager.Query().Equals("backend_group_id", lbbg.Id).IsFalse("pending_deleted")
+	rules := []SLoadbalancerListenerRule{}
+	err := db.FetchModelObjects(LoadbalancerListenerRuleManager, q, &rules)
+	if err != nil {
+		return nil, err
+	}
+	return rules, nil
 }
 
 func (lbbg *SLoadbalancerBackendGroup) GetLoadbalancerListeners() ([]SLoadbalancerListener, error) {
@@ -505,6 +516,28 @@ func (lbbg *SLoadbalancerBackendGroup) GetHuaweiBackendGroupParams(lblis *SLoadb
 	ret.Scheduler = lblis.Scheduler
 	ret.StickySession = stickySession
 	ret.HealthCheck = healthCheck
+
+	return ret, nil
+}
+
+func (lbbg *SLoadbalancerBackendGroup) GetAwsCachedlbbg() ([]SAwsCachedLbbg, error) {
+	ret := []SAwsCachedLbbg{}
+	q := AwsCachedLbbgManager.Query().Equals("backend_group_id", lbbg.GetId())
+	err := db.FetchModelObjects(AwsCachedLbbgManager, q, &ret)
+	if err != nil {
+		return nil, errors.Wrap(err, "loadbalancerBackendGroup.GetAwsCachedlbbg")
+	}
+
+	return ret, nil
+}
+
+func (lbbg *SLoadbalancerBackendGroup) GetHuaweiCachedlbbg() ([]SHuaweiCachedLbbg, error) {
+	ret := []SHuaweiCachedLbbg{}
+	q := HuaweiCachedLbbgManager.Query().Equals("backend_group_id", lbbg.GetId())
+	err := db.FetchModelObjects(HuaweiCachedLbbgManager, q, &ret)
+	if err != nil {
+		return nil, errors.Wrap(err, "loadbalancerBackendGroup.GetHuaweiCachedlbbg")
+	}
 
 	return ret, nil
 }

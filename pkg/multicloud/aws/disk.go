@@ -188,7 +188,7 @@ func (self *SDisk) GetMountpoint() string {
 }
 
 func (self *SDisk) Delete(ctx context.Context) error {
-	if _, err := self.storage.zone.region.GetDisk(self.DiskId); err == ErrorNotFound() {
+	if _, err := self.storage.zone.region.GetDisk(self.DiskId); err == cloudprovider.ErrNotFound {
 		log.Errorf("Failed to find disk %s when delete", self.DiskId)
 		return nil
 	}
@@ -478,6 +478,11 @@ func (self *SRegion) CreateDisk(zoneId string, category string, name string, siz
 	if len(snapshotId) > 0 {
 		params.SetSnapshotId(snapshotId)
 	}
+
+	if category == api.STORAGE_IO1_SSD {
+		params.SetIops(200)
+	}
+
 	params.SetTagSpecifications([]*ec2.TagSpecification{ec2Tags})
 
 	ret, err := self.ec2Client.CreateVolume(params)

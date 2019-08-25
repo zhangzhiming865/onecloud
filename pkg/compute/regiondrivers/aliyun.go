@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/onecloud/pkg/util/choices"
@@ -66,7 +67,7 @@ func (self *SAliyunRegionDriver) validateCreateLBCommonData(ownerId mcclient.IId
 		"loadbalancer_spec": loadbalancerSpecV,
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, nil, err
 	}
 
@@ -200,7 +201,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerBackendData(ctx conte
 		"send_proxy":   validators.NewStringChoicesValidator("send_proxy", api.LB_SENDPROXY_CHOICES).Default(api.LB_SENDPROXY_OFF),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -300,7 +301,7 @@ func (self *SAliyunRegionDriver) ValidateUpdateLoadbalancerBackendData(ctx conte
 		"send_proxy": validators.NewStringChoicesValidator("send_proxy", api.LB_SENDPROXY_CHOICES).Optional(true),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, true); err != nil {
 		return nil, err
 	}
 
@@ -334,7 +335,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerListenerRuleData(ctx 
 		"http_request_rate_per_src": validators.NewNonNegativeValidator("http_request_rate_per_src").Default(0),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -439,7 +440,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerListenerData(ctx cont
 		"http_request_rate_per_src": validators.NewNonNegativeValidator("http_request_rate_per_src").Default(0),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -487,7 +488,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerListenerData(ctx cont
 			"enable_http2":      validators.NewBoolValidator("enable_http2").Default(true),
 		}
 
-		if err := RunValidators(httpsV, data); err != nil {
+		if err := RunValidators(httpsV, data, false); err != nil {
 			return nil, err
 		}
 	}
@@ -508,7 +509,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerListenerData(ctx cont
 		"health_check_interval": validators.NewRangeValidator("health_check_interval", 1, 50).Default(2),
 	}
 
-	if err := RunValidators(keyVHealth, data); err != nil {
+	if err := RunValidators(keyVHealth, data, false); err != nil {
 		return nil, err
 	}
 
@@ -578,7 +579,7 @@ func (self *SAliyunRegionDriver) ValidateCreateLoadbalancerListenerData(ctx cont
 		V["backend_server_port"] = validators.NewPortValidator("backend_server_port")
 	}
 
-	if err := RunValidators(V, data); err != nil {
+	if err := RunValidators(V, data, false); err != nil {
 		return nil, err
 	}
 
@@ -666,7 +667,7 @@ func (self *SAliyunRegionDriver) ValidateUpdateLoadbalancerListenerData(ctx cont
 		"enable_http2":      validators.NewBoolValidator("enable_http2"),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, true); err != nil {
 		return nil, err
 	}
 
@@ -796,7 +797,7 @@ func (self *SAliyunRegionDriver) ValidateUpdateLoadbalancerListenerData(ctx cont
 		}
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, true); err != nil {
 		return nil, err
 	}
 	return self.SManagedVirtualizationRegionDriver.ValidateUpdateLoadbalancerListenerData(ctx, userCred, data, lblis, backendGroup)
@@ -822,26 +823,33 @@ func daysValidate(days []int, min, max int) ([]int, error) {
 	return days, nil
 }
 
+func (self *SAliyunRegionDriver) ValidateCreateSnapshopolicyDiskData(ctx context.Context, userCred mcclient.TokenCredential, diskID string) error {
+	ret, err := models.SnapshotPolicyDiskManager.FetchAllSnapshotPolicyOfDisk(ctx, userCred, diskID)
+	if err != nil {
+		return err
+	}
+	if len(ret) != 0 {
+		return httperrors.NewBadRequestError("One disk could't attach two snapshot policy in aliyun; please detach last one first.")
+	}
+	return nil
+}
+
 func (self *SAliyunRegionDriver) ValidateCreateSnapshotPolicyData(ctx context.Context, userCred mcclient.TokenCredential, data *compute.SSnapshotPolicyCreateInput) error {
-	var err error
+	err := self.SManagedVirtualizationRegionDriver.ValidateCreateSnapshotPolicyData(ctx, userCred, data)
+	if err != nil {
+		return err
+	}
 	if data.RetentionDays < -1 || data.RetentionDays == 0 || data.RetentionDays > 65535 {
 		return httperrors.NewInputParameterError("Retention days must in 1~65535 or -1")
 	}
+	return nil
+}
 
-	if len(data.RepeatWeekdays) == 0 {
-		return httperrors.NewMissingParameterError("repeat_weekdays")
-	}
-	data.RepeatWeekdays, err = daysValidate(data.RepeatWeekdays, 1, 7)
-	if err != nil {
-		return httperrors.NewInputParameterError(err.Error())
-	}
-
-	if len(data.TimePoints) == 0 {
-		return httperrors.NewInputParameterError("time_points")
-	}
-	data.TimePoints, err = daysValidate(data.TimePoints, 0, 23)
-	if err != nil {
-		return httperrors.NewInputParameterError(err.Error())
+func (self *SAliyunRegionDriver) ValidateSnapshotCreate(ctx context.Context, userCred mcclient.TokenCredential, disk *models.SDisk, data *jsonutils.JSONDict) error {
+	name, _ := data.GetString("name")
+	if strings.HasPrefix(name, "auto") || strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "https://") {
+		return httperrors.NewBadRequestError(
+			"Snapshot for %s name can't start with auto, http:// or https://", self.GetProvider())
 	}
 	return nil
 }

@@ -80,8 +80,8 @@ type ICloudRegion interface {
 
 	CreateSnapshotPolicy(*SnapshotPolicyInput) (string, error)
 	DeleteSnapshotPolicy(string) error
-	ApplySnapshotPolicyToDisks(snapshotPolicyId string, diskIds []string) error
-	CancelSnapshotPolicyToDisks(diskIds []string) error
+	ApplySnapshotPolicyToDisks(snapshotPolicyId string, diskId string) error
+	CancelSnapshotPolicyToDisks(snapshotPolicyId string, diskId string) error
 	GetISnapshotPolicies() ([]ICloudSnapshotPolicy, error)
 	GetISnapshotPolicyById(snapshotPolicyId string) (ICloudSnapshotPolicy, error)
 
@@ -107,9 +107,8 @@ type ICloudRegion interface {
 	CreateILoadBalancerAcl(acl *SLoadbalancerAccessControlList) (ICloudLoadbalancerAcl, error)
 	CreateILoadBalancerCertificate(cert *SLoadbalancerCertificate) (ICloudLoadbalancerCertificate, error)
 
-	GetISkuById(skuId string) (ICloudSku, error)
 	GetISkus(zoneId string) ([]ICloudSku, error)
-	CreateISku(sku *SServerSku) (ICloudSku, error)
+	DeleteISkuByName(name string) error
 
 	GetINetworkInterfaces() ([]ICloudNetworkInterface, error)
 
@@ -118,9 +117,12 @@ type ICloudRegion interface {
 	DeleteIBucket(name string) error
 	IBucketExist(name string) (bool, error)
 	GetIBucketById(name string) (ICloudBucket, error)
+	GetIBucketByName(name string) (ICloudBucket, error)
 
 	GetIDBInstances() ([]ICloudDBInstance, error)
 	GetIDBInstanceBackups() ([]ICloudDBInstanceBackup, error)
+
+	GetIElasticcaches() ([]ICloudElasticcache, error)
 
 	GetProvider() string
 }
@@ -215,7 +217,9 @@ type ICloudHost interface {
 	GetNodeCount() int8
 	GetCpuDesc() string
 	GetCpuMhz() int
+	GetCpuCmtbound() float32
 	GetMemSizeMB() int
+	GetMemCmtbound() float32
 	GetStorageSizeMB() int
 	GetStorageType() string
 	GetHostType() string
@@ -274,8 +278,7 @@ type ICloudVM interface {
 
 	DeployVM(ctx context.Context, name string, password string, publicKey string, deleteKeypair bool, description string) error
 
-	ChangeConfig(ctx context.Context, ncpu int, vmem int) error
-	ChangeConfig2(ctx context.Context, instanceType string) error // instanceType support
+	ChangeConfig(ctx context.Context, config *SManagedVMChangeConfig) error
 
 	GetVNCInfo() (jsonutils.JSONObject, error)
 	AttachDisk(ctx context.Context, diskId string) error
@@ -370,7 +373,7 @@ type ICloudDisk interface {
 	GetISnapshot(idStr string) (ICloudSnapshot, error)
 	GetISnapshots() ([]ICloudSnapshot, error)
 
-	GetExtSnapshotPolicyId() string
+	GetExtSnapshotPolicyIds() []string
 
 	Resize(ctx context.Context, newSizeMB int64) error
 	Reset(ctx context.Context, snapshotId string) (string, error)
@@ -381,7 +384,7 @@ type ICloudDisk interface {
 type ICloudSnapshot interface {
 	IVirtualResource
 
-	GetSize() int32
+	GetSizeMb() int32
 	GetDiskId() string
 	GetDiskType() string
 	Delete() error
@@ -390,6 +393,7 @@ type ICloudSnapshot interface {
 type ICloudSnapshotPolicy interface {
 	IVirtualResource
 
+	IsActivated() bool
 	GetRetentionDays() int
 	GetRepeatWeekdays() ([]int, error)
 	GetTimePoints() ([]int, error)
@@ -766,4 +770,72 @@ type ICloudDBInstanceAccountPrivilege interface {
 
 	GetPrivilege() string
 	GetDBName() string
+}
+
+type ICloudElasticcache interface {
+	IVirtualResource
+	IBillingResource
+
+	GetInstanceType() string
+	GetCapacityMB() int
+	GetArchType() string
+	GetNodeType() string
+	GetEngine() string
+	GetEngineVersion() string
+
+	GetVpcId() string
+	GetZoneId() string
+	GetNetworkType() string
+	GetNetworkId() string
+
+	GetPrivateDNS() string
+	GetPrivateIpAddr() string
+	GetPrivateConnectPort() int
+	GetPublicDNS() string
+	GetPublicIpAddr() string
+	GetPublicConnectPort() int
+
+	GetMaintainStartTime() string
+	GetMaintainEndTime() string
+
+	GetICloudElasticcacheAccounts() ([]ICloudElasticcacheAccount, error)
+	GetICloudElasticcacheAcls() ([]ICloudElasticcacheAcl, error)
+	GetICloudElasticcacheBackups() ([]ICloudElasticcacheBackup, error)
+	GetICloudElasticcacheParameters() ([]ICloudElasticcacheParameter, error)
+}
+
+type ICloudElasticcacheAccount interface {
+	ICloudResource
+
+	GetAccountType() string
+	GetAccountPrivilege() string
+}
+
+type ICloudElasticcacheAcl interface {
+	ICloudResource
+
+	GetIpList() string
+}
+
+type ICloudElasticcacheBackup interface {
+	ICloudResource
+
+	GetBackupSizeMb() int
+	GetBackupType() string
+	GetBackupMode() string
+	GetDownloadURL() string
+
+	GetStartTime() time.Time
+	GetEndTime() time.Time
+}
+
+type ICloudElasticcacheParameter interface {
+	ICloudResource
+
+	GetParameterKey() string
+	GetParameterValue() string
+	GetParameterValueRange() string
+	GetDescription() string
+	GetModifiable() bool
+	GetForceRestart() bool
 }

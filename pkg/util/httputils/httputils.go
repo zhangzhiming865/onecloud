@@ -130,12 +130,14 @@ func GetAddrPort(urlStr string) (string, int, error) {
 func GetTransport(insecure bool, timeout time.Duration) *http.Transport {
 	return &http.Transport{
 		DialContext: (&net.Dialer{
-			Timeout: 5 * time.Second,
+			Timeout:   timeout,
+			KeepAlive: timeout,
 		}).DialContext,
-		IdleConnTimeout:       5 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: insecure},
+		DisableCompression:    true,
 	}
 }
 
@@ -233,7 +235,7 @@ func JSONRequest(client *http.Client, ctx context.Context, method THttpMethod, u
 //
 // Subsequently this allows golang http RoundTripper
 // to re-use the same connection for future requests.
-func closeResponse(resp *http.Response) {
+func CloseResponse(resp *http.Response) {
 	// Callers should close resp.Body when done reading from it.
 	// If resp.Body is not closed, the Client's underlying RoundTripper
 	// (typically Transport) may not be able to re-use a persistent TCP
@@ -255,7 +257,7 @@ func ParseJSONResponse(resp *http.Response, err error, debug bool) (http.Header,
 		ce.Details = err.Error()
 		return nil, nil, &ce
 	}
-	defer closeResponse(resp)
+	defer CloseResponse(resp)
 	if debug {
 		if resp.StatusCode < 300 {
 			green("Status:", resp.StatusCode)

@@ -480,7 +480,7 @@ func (manager *SGuestManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field 
 	case "account":
 		hosts := HostManager.Query().SubQuery()
 		cloudproviders := CloudproviderManager.Query().SubQuery()
-		cloudaccounts := CloudaccountManager.Query().SubQuery()
+		cloudaccounts := CloudaccountManager.Query("name", "id").Distinct().SubQuery()
 		q = q.Join(hosts, sqlchemy.Equals(q.Field("host_id"), hosts.Field("id")))
 		q = q.Join(cloudproviders, sqlchemy.Equals(hosts.Field("manager_id"), cloudproviders.Field("id")))
 		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
@@ -518,6 +518,21 @@ func (guest *SGuest) validateDeleteCondition(ctx context.Context, isPurge bool) 
 	}
 	if !isPurge && guest.IsValidPrePaid() {
 		return httperrors.NewForbiddenError("not allow to delete prepaid server in valid status")
+	}
+	gd := guest.GetDisks()
+	for i := 0; i < len(gd); i++ {
+		d := gd[i].GetDisk()
+		storage := d.GetStorage()
+		if storage.StorageType == api.STORAGE_RBD {
+			scnt, err := d.GetSnapshotCount()
+			if err != nil {
+				return err
+			}
+			if scnt > 0 {
+				return httperrors.NewBadRequestError(
+					"not allow to delete guest with %s disk has snapshots", storage.StorageType)
+			}
+		}
 	}
 	return guest.SVirtualResourceBase.ValidateDeleteCondition(ctx)
 }
@@ -1457,25 +1472,36 @@ func (manager *SGuestManager) ListItemExportKeys(ctx context.Context, q *sqlchem
 		guestIpsQuery := GuestnetworkManager.Query("guest_id").GroupBy("guest_id")
 		guestIpsQuery.AppendField(sqlchemy.GROUP_CONCAT("concat_ip_addr", guestIpsQuery.Field("ip_addr")))
 		ipsSubQuery := guestIpsQuery.SubQuery()
-		guestIpsQuery.DebugQuery()
 		q.LeftJoin(ipsSubQuery, sqlchemy.Equals(q.Field("id"), ipsSubQuery.Field("guest_id")))
 		q.AppendField(ipsSubQuery.Field("concat_ip_addr"))
 	}
+
+	if utils.IsInStringArray("user_tags", keys) {
+		guestUserTagsQuery := db.Metadata.Query().Startswith("id", "server::").
+			Startswith("key", db.USER_TAG_PREFIX).GroupBy("id")
+		guestUserTagsQuery.AppendField(sqlchemy.SubStr("guest_id", guestUserTagsQuery.Field("id"), len("server::")+1, 0))
+		guestUserTagsQuery.AppendField(
+			sqlchemy.GROUP_CONCAT("user_tags", sqlchemy.CONCAT("",
+				guestUserTagsQuery.Field("key"),
+				guestUserTagsQuery.Field("value"),
+			)))
+		subQ := guestUserTagsQuery.SubQuery()
+		q.LeftJoin(subQ, sqlchemy.Equals(q.Field("id"), subQ.Field("guest_id")))
+		q.AppendField(subQ.Field("user_tags"))
+	}
+
 	if utils.IsInStringArray("disk", keys) {
 		guestDisksQuery := GuestdiskManager.Query("guest_id", "disk_id").GroupBy("guest_id")
 		diskQuery := DiskManager.Query("id", "disk_size").SubQuery()
 		guestDisksQuery.Join(diskQuery, sqlchemy.Equals(diskQuery.Field("id"), guestDisksQuery.Field("disk_id")))
 		guestDisksQuery.AppendField(sqlchemy.SUM("disk_size", diskQuery.Field("disk_size")))
 		guestDisksSubQuery := guestDisksQuery.SubQuery()
-		guestDisksSubQuery.DebugQuery()
-		q.LeftJoin(guestDisksSubQuery, sqlchemy.Equals(q.Field("id"), guestDisksSubQuery.
-			Field("guest_id")))
+		q.LeftJoin(guestDisksSubQuery, sqlchemy.Equals(q.Field("id"), guestDisksSubQuery.Field("guest_id")))
 		q.AppendField(guestDisksSubQuery.Field("disk_size"))
 	}
 	if utils.IsInStringArray("eip", keys) {
 		eipsQuery := ElasticipManager.Query("associate_id", "ip_addr").Equals("associate_type", "server").GroupBy("associate_id")
 		eipsSubQuery := eipsQuery.SubQuery()
-		eipsSubQuery.DebugQuery()
 		q.LeftJoin(eipsSubQuery, sqlchemy.Equals(q.Field("id"), eipsSubQuery.Field("associate_id")))
 		q.AppendField(eipsSubQuery.Field("ip_addr", "eip"))
 	}
@@ -1547,6 +1573,9 @@ func (manager *SGuestManager) GetExportExtraKeys(ctx context.Context, query json
 	}
 	if manager, ok := rowMap["manager"]; ok && len(manager) > 0 {
 		res.Set("manager", jsonutils.NewString(manager))
+	}
+	if userTags, ok := rowMap["user_tags"]; ok && len(userTags) > 0 {
+		res.Set("user_tags", jsonutils.NewString(userTags))
 	}
 	if utils.IsInStringArray("tenant", keys) {
 		if projectId, ok := rowMap["tenant_id"]; ok {

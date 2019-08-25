@@ -12,6 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package aliyun
 
 import (
@@ -57,14 +70,33 @@ func (self *SStorage) GetIZone() cloudprovider.ICloudZone {
 
 func (self *SStorage) GetIDisks() ([]cloudprovider.ICloudDisk, error) {
 	disks := make([]SDisk, 0)
+	offset := 0
+	storageType := self.storageType
+	if self.storageType == api.STORAGE_CLOUD_ESSD_PL2 || self.storageType == api.STORAGE_CLOUD_ESSD_PL3 {
+		storageType = api.STORAGE_CLOUD_ESSD
+	}
 	for {
-		parts, total, err := self.zone.region.GetDisks("", self.zone.GetId(), self.storageType, nil, len(disks), 50)
+		parts, total, err := self.zone.region.GetDisks("", self.zone.GetId(), storageType, nil, offset, 50)
 		if err != nil {
 			log.Errorf("GetDisks fail %s", err)
 			return nil, err
 		}
-		disks = append(disks, parts...)
-		if len(disks) >= total {
+		performanceLevel := ""
+		switch self.storageType {
+		case api.STORAGE_CLOUD_ESSD_PL2:
+			performanceLevel = "PL2"
+		case api.STORAGE_CLOUD_ESSD_PL3:
+			performanceLevel = "PL3"
+		}
+		for _, disk := range parts {
+			if disk.PerformanceLevel == performanceLevel {
+				disks = append(disks, disk)
+			}
+		}
+
+		offset += len(parts)
+
+		if offset >= total {
 			break
 		}
 	}
@@ -82,7 +114,7 @@ func (self *SStorage) GetStorageType() string {
 }
 
 func (self *SStorage) GetMediumType() string {
-	if strings.HasSuffix(self.storageType, "_ssd") {
+	if strings.Contains(self.storageType, "_ssd") {
 		return api.DISK_TYPE_SSD
 	} else {
 		return api.DISK_TYPE_ROTATE

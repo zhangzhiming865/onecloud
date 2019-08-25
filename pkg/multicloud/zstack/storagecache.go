@@ -118,19 +118,19 @@ func (scache *SStoragecache) UploadImage(ctx context.Context, userCred mcclient.
 func (self *SStoragecache) uploadImage(ctx context.Context, userCred mcclient.TokenCredential, image *cloudprovider.SImageCreateOption, isForce bool) (string, error) {
 	s := auth.GetAdminSession(ctx, options.Options.Region, "")
 
-	meta, reader, err := modules.Images.Download(s, image.ImageId, string(qemuimg.QCOW2), false)
+	meta, reader, size, err := modules.Images.Download(s, image.ImageId, string(qemuimg.QCOW2), false)
 	if err != nil {
 		return "", err
 	}
 	log.Infof("meta data %s", meta)
 
-	size, _ := meta.Int("size")
+	// size, _ := meta.Int("size")
 	img, err := self.region.CreateImage(self.ZoneId, image.ImageName, string(qemuimg.QCOW2), image.OsType, "", reader, size)
 	if err != nil {
 		return "", err
 	}
 	img.storageCache = self
-	err = cloudprovider.WaitStatus(img, api.CACHED_IMAGE_STATUS_READY, time.Second*5, time.Minute*10) //windows镜像转换比较慢，等待时间稍微设长一些
+	err = cloudprovider.WaitStatus(img, api.CACHED_IMAGE_STATUS_READY, time.Second*5, time.Minute*20) //windows镜像转换比较慢，等待时间稍微设长一些
 	if err != nil {
 		log.Errorf("waitting for image %s(%s) status ready timeout", img.Name, img.UUID)
 	}

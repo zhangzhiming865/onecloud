@@ -15,6 +15,10 @@
 package aliyun
 
 import (
+	"github.com/pkg/errors"
+	"yunion.io/x/log"
+
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 )
 
@@ -26,4 +30,48 @@ type SObject struct {
 
 func (o *SObject) GetIBucket() cloudprovider.ICloudBucket {
 	return o.bucket
+}
+
+func (o *SObject) GetAcl() cloudprovider.TBucketACLType {
+	acl := cloudprovider.ACLPrivate
+	osscli, err := o.bucket.region.GetOssClient()
+	if err != nil {
+		log.Errorf("o.bucket.region.GetOssClient error %s", err)
+		return acl
+	}
+	bucket, err := osscli.Bucket(o.bucket.Name)
+	if err != nil {
+		log.Errorf("osscli.Bucket error %s", err)
+		return acl
+	}
+	result, err := bucket.GetObjectACL(o.Key)
+	if err != nil {
+		log.Errorf("bucket.GetObjectACL error %s", err)
+		return acl
+	}
+	if result.ACL == string(oss.ACLDefault) {
+		return o.bucket.GetAcl()
+	}
+	acl = cloudprovider.TBucketACLType(result.ACL)
+	return acl
+}
+
+func (o *SObject) SetAcl(aclStr cloudprovider.TBucketACLType) error {
+	acl, err := str2Acl(string(aclStr))
+	if err != nil {
+		return errors.Wrap(err, "str2Acl")
+	}
+	osscli, err := o.bucket.region.GetOssClient()
+	if err != nil {
+		return errors.Wrap(err, "o.bucket.region.GetOssClient")
+	}
+	bucket, err := osscli.Bucket(o.bucket.Name)
+	if err != nil {
+		return errors.Wrap(err, "osscli.Bucket")
+	}
+	err = bucket.SetObjectACL(o.Key, acl)
+	if err != nil {
+		return errors.Wrap(err, "bucket.SetObjectACL")
+	}
+	return nil
 }

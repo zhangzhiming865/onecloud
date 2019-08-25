@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/pkg/errors"
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
 
@@ -483,6 +484,22 @@ func (region *SRegion) GetISkus(zoneId string) ([]cloudprovider.ICloudSku, error
 	return iskus, nil
 }
 
+func (region *SRegion) DeleteISkuByName(name string) error {
+	skus, err := region.GetISkus("")
+	if err != nil {
+		return errors.Wrap(err, "region.GetISkus()")
+	}
+	for _, sku := range skus {
+		if sku.GetName() == name {
+			err = sku.Delete()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (region *SRegion) GetISkuById(skuId string) (cloudprovider.ICloudSku, error) {
 	return region.GetFlavor(skuId)
 }
@@ -504,5 +521,9 @@ func (region *SRegion) IBucketExist(name string) (bool, error) {
 }
 
 func (region *SRegion) GetIBucketById(name string) (cloudprovider.ICloudBucket, error) {
+	return nil, cloudprovider.ErrNotImplemented
+}
+
+func (region *SRegion) GetIBucketByName(name string) (cloudprovider.ICloudBucket, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }

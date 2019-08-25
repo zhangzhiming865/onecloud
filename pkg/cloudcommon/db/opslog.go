@@ -96,6 +96,7 @@ const (
 	ACT_SNAPSHOT_DELETING             = "snapshot_deling"
 	ACT_SNAPSHOT_DELETE               = "snapshot_del"
 	ACT_SNAPSHOT_DELETE_FAIL          = "snapshot_del_fail"
+	ACT_SNAPSHOT_FAKE_DELETE          = "snapshot_fake_del"
 	ACT_SNAPSHOT_UNLINK               = "snapshot_unlink"
 	ACT_APPLY_SNAPSHOT_POLICY         = "apply_snapshot_policy"
 	ACT_APPLY_SNAPSHOT_POLICY_FAILED  = "apply_snapshot_policy_failed"
@@ -104,6 +105,8 @@ const (
 
 	ACT_DISK_CLEAN_UP_SNAPSHOTS      = "disk_clean_up_snapshots"
 	ACT_DISK_CLEAN_UP_SNAPSHOTS_FAIL = "disk_clean_up_snapshots_fail"
+	ACT_DISK_AUTO_SNAPSHOT           = "disk_auto_snapshot"
+	ACT_DISK_AUTO_SNAPSHOT_FAIL      = "disk_auto_snapshot_fail"
 
 	ACT_ALLOCATING           = "allocating"
 	ACT_BACKUP_ALLOCATING    = "backup_allocating"
@@ -175,10 +178,11 @@ const (
 	ACT_UNCACHE_IMAGE_FAIL = "uncache_image_fail"
 	ACT_UNCACHED_IMAGE     = "uncached_image"
 
-	ACT_SYNC_CLOUD_DISK    = "sync_cloud_disk"
-	ACT_SYNC_CLOUD_SERVER  = "sync_cloud_server"
-	ACT_SYNC_CLOUD_EIP     = "sync_cloud_eip"
-	ACT_SYNC_CLOUD_PROJECT = "sync_cloud_project"
+	ACT_SYNC_CLOUD_DISK          = "sync_cloud_disk"
+	ACT_SYNC_CLOUD_SERVER        = "sync_cloud_server"
+	ACT_SYNC_CLOUD_EIP           = "sync_cloud_eip"
+	ACT_SYNC_CLOUD_PROJECT       = "sync_cloud_project"
+	ACT_SYNC_CLOUD_ELASTIC_CACHE = "sync_cloud_elastic_cache"
 
 	ACT_PENDING_DELETE = "pending_delete"
 	ACT_CANCEL_DELETE  = "cancel_delete"
@@ -225,8 +229,8 @@ type SOpsLog struct {
 	Action  string `width:"32" charset:"utf8" nullable:"false" list:"user" create:"required"`   //= Column(VARCHAR(32, charset='ascii'), nullable=False)
 	Notes   string `width:"2048" charset:"utf8" list:"user" create:"required"`                  // = Column(VARCHAR(2048, charset='utf8'))
 
-	ProjectId string `name:"tenant_id" width:"128" charset:"ascii" list:"user" create:"required"` // = Column(VARCHAR(ID_LENGTH, charset='ascii'))
-	Project   string `name:"tenant" width:"128" charset:"utf8" list:"user" create:"required"`     // tenant    = Column(VARCHAR(128, charset='utf8'))
+	ProjectId string `name:"tenant_id" width:"128" charset:"ascii" list:"user" create:"required" index:"true"` // = Column(VARCHAR(ID_LENGTH, charset='ascii'))
+	Project   string `name:"tenant" width:"128" charset:"utf8" list:"user" create:"required"`                  // tenant    = Column(VARCHAR(128, charset='utf8'))
 
 	ProjectDomainId string `name:"project_domain_id" default:"default" width:"128" charset:"ascii" list:"user" create:"required"`
 	ProjectDomain   string `name:"project_domain" default:"Default" width:"128" charset:"utf8" list:"user" create:"required"`

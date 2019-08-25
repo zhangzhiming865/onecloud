@@ -43,8 +43,11 @@ func init() {
 	models.RegisterRegionDriver(&driver)
 }
 
-func RunValidators(validators map[string]validators.IValidator, data *jsonutils.JSONDict) error {
+func RunValidators(validators map[string]validators.IValidator, data *jsonutils.JSONDict, optional bool) error {
 	for _, v := range validators {
+		if optional {
+			v.Optional(true)
+		}
 		if err := v.Validate(data); err != nil {
 			return err
 		}
@@ -61,12 +64,14 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerData(ctx context.Context
 	ownerId := ctx.Value("ownerId").(mcclient.IIdentityProvider)
 	networkV := validators.NewModelIdOrNameValidator("network", "network", ownerId)
 	addressV := validators.NewIPv4AddrValidator("address")
+	clusterV := validators.NewModelIdOrNameValidator("cluster", "loadbalancercluster", ownerId)
 	keyV := map[string]validators.IValidator{
 		"status":  validators.NewStringChoicesValidator("status", api.LB_STATUS_SPEC).Default(api.LB_STATUS_ENABLED),
 		"address": addressV.Optional(true),
 		"network": networkV,
+		"cluster": clusterV.Optional(true),
 	}
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -74,6 +79,51 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerData(ctx context.Context
 	region, zone, vpc, _, err := network.ValidateElbNetwork(addressV.IP)
 	if err != nil {
 		return nil, err
+	}
+
+	if zone == nil {
+		return nil, httperrors.NewInputParameterError("zone info missing")
+	}
+
+	if clusterV.Model == nil {
+		clusters := models.LoadbalancerClusterManager.FindByZoneId(zone.Id)
+		if len(clusters) == 0 {
+			return nil, httperrors.NewInputParameterError("zone %s(%s) has no lbcluster", zone.Name, zone.Id)
+		}
+		var (
+			wireMatched []*models.SLoadbalancerCluster
+			wireNeutral []*models.SLoadbalancerCluster
+		)
+		for i := range clusters {
+			c := &clusters[i]
+			if c.WireId != "" {
+				if c.WireId == network.WireId {
+					wireMatched = append(wireMatched, c)
+				}
+			} else {
+				wireNeutral = append(wireNeutral, c)
+			}
+		}
+		var choices []*models.SLoadbalancerCluster
+		if len(wireMatched) > 0 {
+			choices = wireMatched
+		} else if len(wireNeutral) > 0 {
+			choices = wireNeutral
+		} else {
+			return nil, httperrors.NewInputParameterError("no viable lbcluster")
+		}
+		i := rand.Intn(len(choices))
+		data.Set("cluster_id", jsonutils.NewString(choices[i].Id))
+	} else {
+		cluster := clusterV.Model.(*models.SLoadbalancerCluster)
+		if cluster.ZoneId != zone.Id {
+			return nil, httperrors.NewInputParameterError("cluster zone %s does not match network zone %s ",
+				cluster.ZoneId, zone.Id)
+		}
+		if cluster.WireId != "" && cluster.WireId != network.WireId {
+			return nil, httperrors.NewInputParameterError("cluster wire affiliation does not match network's: %s != %s",
+				cluster.WireId, network.WireId)
+		}
 	}
 
 	data.Set("cloudregion_id", jsonutils.NewString(region.GetId()))
@@ -120,7 +170,7 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerBackendData(ctx context.
 		"send_proxy":   validators.NewStringChoicesValidator("send_proxy", api.LB_SENDPROXY_CHOICES).Default(api.LB_SENDPROXY_OFF),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -221,7 +271,7 @@ func (self *SKVMRegionDriver) ValidateUpdateLoadbalancerBackendData(ctx context.
 		"send_proxy": validators.NewStringChoicesValidator("send_proxy", api.LB_SENDPROXY_CHOICES).Optional(true),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, true); err != nil {
 		return nil, err
 	}
 
@@ -243,7 +293,7 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerListenerRuleData(ctx con
 		"http_request_rate_per_src": validators.NewNonNegativeValidator("http_request_rate_per_src").Default(0),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -333,7 +383,7 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerListenerData(ctx context
 		"http_request_rate_per_src": validators.NewNonNegativeValidator("http_request_rate_per_src").Default(0),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, false); err != nil {
 		return nil, err
 	}
 
@@ -360,7 +410,7 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerListenerData(ctx context
 			"enable_http2":      validators.NewBoolValidator("enable_http2").Default(true),
 		}
 
-		if err := RunValidators(httpsV, data); err != nil {
+		if err := RunValidators(httpsV, data, false); err != nil {
 			return nil, err
 		}
 	}
@@ -381,7 +431,7 @@ func (self *SKVMRegionDriver) ValidateCreateLoadbalancerListenerData(ctx context
 		"health_check_interval": validators.NewRangeValidator("health_check_interval", 1, 1000).Default(5),
 	}
 
-	if err := RunValidators(keyVHealth, data); err != nil {
+	if err := RunValidators(keyVHealth, data, false); err != nil {
 		return nil, err
 	}
 
@@ -457,7 +507,7 @@ func (self *SKVMRegionDriver) ValidateUpdateLoadbalancerListenerData(ctx context
 		"enable_http2":      validators.NewBoolValidator("enable_http2"),
 	}
 
-	if err := RunValidators(keyV, data); err != nil {
+	if err := RunValidators(keyV, data, true); err != nil {
 		return nil, err
 	}
 
@@ -666,4 +716,59 @@ func (self *SKVMRegionDriver) ValidateCreateVpcData(ctx context.Context, userCre
 
 func (self *SKVMRegionDriver) ValidateCreateEipData(ctx context.Context, userCred mcclient.TokenCredential, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
 	return nil, httperrors.NewNotImplementedError("Not Implement EIP")
+}
+
+func (self *SKVMRegionDriver) ValidateSnapshotDelete(ctx context.Context, snapshot *models.SSnapshot) error {
+	storage := snapshot.GetStorage()
+	if storage == nil {
+		return httperrors.NewInternalServerError("Kvm snapshot missing storage ??")
+	}
+	return models.GetStorageDriver(storage.StorageType).ValidateSnapshotDelete(ctx, snapshot)
+}
+
+func (self *SKVMRegionDriver) RequestDeleteSnapshot(ctx context.Context, snapshot *models.SSnapshot, task taskman.ITask) error {
+	storage := snapshot.GetStorage()
+	if storage == nil {
+		return httperrors.NewInternalServerError("Kvm snapshot missing storage ??")
+	}
+	return models.GetStorageDriver(storage.StorageType).RequestDeleteSnapshot(ctx, snapshot, task)
+}
+
+func (self *SKVMRegionDriver) ValidateSnapshotCreate(ctx context.Context, userCred mcclient.TokenCredential, disk *models.SDisk, data *jsonutils.JSONDict) error {
+	storage := disk.GetStorage()
+	return models.GetStorageDriver(storage.StorageType).ValidateSnapshotCreate(ctx, userCred, disk, data)
+}
+
+func (self *SKVMRegionDriver) RequestCreateSnapshot(ctx context.Context, snapshot *models.SSnapshot, task taskman.ITask) error {
+	storage := snapshot.GetStorage()
+	if storage == nil {
+		return httperrors.NewInternalServerError("Kvm snapshot missing storage ??")
+	}
+	return models.GetStorageDriver(storage.StorageType).RequestCreateSnapshot(ctx, snapshot, task)
+}
+
+func (self *SKVMRegionDriver) SnapshotIsOutOfChain(disk *models.SDisk) bool {
+	storage := disk.GetStorage()
+	return models.GetStorageDriver(storage.StorageType).SnapshotIsOutOfChain(disk)
+}
+
+func (self *SKVMRegionDriver) GetDiskResetParams(snapshot *models.SSnapshot) *jsonutils.JSONDict {
+	params := jsonutils.NewDict()
+	params.Set("snapshot_id", jsonutils.NewString(snapshot.Id))
+	params.Set("out_of_chain", jsonutils.NewBool(snapshot.OutOfChain))
+	return params
+}
+
+func (self *SKVMRegionDriver) OnDiskReset(ctx context.Context, userCred mcclient.TokenCredential, disk *models.SDisk, snapshot *models.SSnapshot, data jsonutils.JSONObject) error {
+	if disk.DiskSize != snapshot.Size {
+		_, err := db.Update(disk, func() error {
+			disk.DiskSize = snapshot.Size
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+	}
+	storage := disk.GetStorage()
+	return models.GetStorageDriver(storage.StorageType).OnDiskReset(ctx, userCred, disk, snapshot, data)
 }

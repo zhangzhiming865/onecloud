@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"yunion.io/x/jsonutils"
-	"yunion.io/x/log"
 	"yunion.io/x/pkg/errors"
 	"yunion.io/x/sqlchemy"
 
@@ -243,7 +242,6 @@ func FetchUserInfo(ctx context.Context, data jsonutils.JSONObject) (mcclient.IId
 }
 
 func FetchProjectInfo(ctx context.Context, data jsonutils.JSONObject) (mcclient.IIdentityProvider, error) {
-	log.Debugf("FetchProjectInfo %s", data)
 	tenantId, key := jsonutils.GetAnyString2(data, []string{"project", "project_id", "tenant", "tenant_id"})
 	if len(tenantId) > 0 {
 		data.(*jsonutils.JSONDict).Remove(key)
@@ -260,6 +258,8 @@ func FetchProjectInfo(ctx context.Context, data jsonutils.JSONObject) (mcclient.
 			ProjectId: t.Id,
 			Project:   t.Name,
 		}
+		data.(*jsonutils.JSONDict).Set("tenant_id", jsonutils.NewString(t.Id))
+		data.(*jsonutils.JSONDict).Set("domain_id", jsonutils.NewString(t.DomainId))
 		return &ownerId, nil
 	}
 	return FetchDomainInfo(ctx, data)
@@ -277,6 +277,7 @@ func FetchDomainInfo(ctx context.Context, data jsonutils.JSONObject) (mcclient.I
 			return nil, httperrors.NewGeneralError(err)
 		}
 		owner := SOwnerId{DomainId: domain.Id, Domain: domain.Name}
+		data.(*jsonutils.JSONDict).Set("domain_id", jsonutils.NewString(domain.Id))
 		return &owner, nil
 	}
 	return nil, nil

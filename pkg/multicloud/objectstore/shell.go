@@ -21,6 +21,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pkg/errors"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 	"yunion.io/x/onecloud/pkg/util/printutils"
 	"yunion.io/x/onecloud/pkg/util/shellutils"
@@ -39,10 +40,28 @@ func S3Shell() {
 	})
 
 	type BucketCreateOptions struct {
-		NAME string `help:"name of bucket to create"`
+		NAME         string `help:"name of bucket to create"`
+		Acl          string `help:"ACL string" choices:"private|public-read|public-read-write"`
+		StorageClass string `help:"StorageClass" choices:"STANDARD|IA|ARCHIVE"`
 	}
 	shellutils.R(&BucketCreateOptions{}, "bucket-create", "Create bucket", func(cli cloudprovider.ICloudRegion, args *BucketCreateOptions) error {
-		err := cli.CreateIBucket(args.NAME, "", "")
+		err := cli.CreateIBucket(args.NAME, args.StorageClass, args.Acl)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+
+	type BucketAclOptions struct {
+		BUCKET string `help:"name of bucket"`
+		ACL    string `help:"ACL string" choices:"private|public-read|public-read-write"`
+	}
+	shellutils.R(&BucketAclOptions{}, "bucket-set-acl", "Create bucket", func(cli cloudprovider.ICloudRegion, args *BucketAclOptions) error {
+		bucket, err := cli.GetIBucketById(args.BUCKET)
+		if err != nil {
+			return err
+		}
+		err = bucket.SetAcl(cloudprovider.TBucketACLType(args.ACL))
 		if err != nil {
 			return err
 		}
@@ -138,6 +157,9 @@ func S3Shell() {
 		KEY    string `help:"key of object"`
 		Path   string `help:"Path of file to upload"`
 
+		BlockSize int64 `help:"blocksz in MB" default:"100"`
+
+		Acl          string `help:"acl" choices:"private|public-read|public-read-write"`
 		ContentType  string `help:"content-type"`
 		StorageClass string `help:"storage class"`
 	}
@@ -147,10 +169,16 @@ func S3Shell() {
 			return err
 		}
 		var input io.ReadSeeker
+		var fSize int64
 		if len(args.Path) > 0 {
+			finfo, err := os.Stat(args.Path)
+			if err != nil {
+				return errors.Wrap(err, "os.Stat")
+			}
+			fSize = finfo.Size()
 			file, err := os.Open(args.Path)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "os.Open")
 			}
 			defer file.Close()
 
@@ -158,7 +186,7 @@ func S3Shell() {
 		} else {
 			input = os.Stdout
 		}
-		err = bucket.PutObject(context.Background(), args.KEY, input, args.ContentType, args.StorageClass)
+		err = cloudprovider.UploadObject(context.Background(), bucket, args.KEY, args.BlockSize*1000*1000, input, fSize, args.ContentType, cloudprovider.TBucketACLType(args.Acl), args.StorageClass, true)
 		if err != nil {
 			return err
 		}
@@ -199,6 +227,45 @@ func S3Shell() {
 			return err
 		}
 		fmt.Println(urlStr)
+		return nil
+	})
+
+	type BucketAclOption struct {
+		BUCKET string `help:"name of bucket to put object"`
+		KEY    string `help:"key of object"`
+	}
+	shellutils.R(&BucketAclOption{}, "object-acl", "Get object acl", func(cli cloudprovider.ICloudRegion, args *BucketAclOption) error {
+		bucket, err := cli.GetIBucketById(args.BUCKET)
+		if err != nil {
+			return err
+		}
+		object, err := cloudprovider.GetIObject(bucket, args.KEY)
+		if err != nil {
+			return err
+		}
+		fmt.Println(object.GetAcl())
+		return nil
+	})
+
+	type BucketSetAclOption struct {
+		BUCKET string `help:"name of bucket to put object"`
+		KEY    string `help:"key of object"`
+		ACL    string `help:"Target acl" choices:"default|private|public-read|public-read-write"`
+	}
+	shellutils.R(&BucketSetAclOption{}, "object-set-acl", "Get object acl", func(cli cloudprovider.ICloudRegion, args *BucketSetAclOption) error {
+		bucket, err := cli.GetIBucketById(args.BUCKET)
+		if err != nil {
+			return err
+		}
+		object, err := cloudprovider.GetIObject(bucket, args.KEY)
+		if err != nil {
+			return err
+		}
+		err = object.SetAcl(cloudprovider.TBucketACLType(args.ACL))
+		if err != nil {
+			return err
+		}
+		fmt.Println("Success!")
 		return nil
 	})
 }

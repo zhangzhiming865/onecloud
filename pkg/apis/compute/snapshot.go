@@ -30,6 +30,8 @@ type SSnapshotCreateInput struct {
 	Size          int    `json:"size"`
 	DiskType      string `json:"disk_type"`
 	CloudregionId string `json:"cloudregion_id"`
+	OutOfChain    bool   `json:"out_of_chain"`
+	ManagerId     string `json:"manager_id"`
 }
 
 type SSnapshotPolicyCreateInput struct {
@@ -45,4 +47,19 @@ type SSnapshotPolicyCreateInput struct {
 	RetentionDays  int   `json:"retention_days"`
 	RepeatWeekdays []int `json:"repeat_weekdays"`
 	TimePoints     []int `json:"time_points"`
+}
+
+type SSnapshotPolicyCreateInternalInput struct {
+	apis.Meta
+
+	Name      string
+	ProjectId string
+	DomainId  string
+
+	ManagerId     string
+	CloudregionId string
+
+	RetentionDays  int
+	RepeatWeekdays uint8
+	TimePoints     uint32
 }

@@ -23,11 +23,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
+	"yunion.io/x/pkg/errors"
 	"yunion.io/x/pkg/tristate"
 	"yunion.io/x/pkg/util/timeutils"
 	"yunion.io/x/pkg/utils"
@@ -107,7 +109,7 @@ type SImage struct {
 	// VirtualSize int64  `nullable:"true" list:"user" create:"optional"`
 	Location string `nullable:"true"`
 
-	DiskFormat string `width:"20" charset:"ascii" nullable:"true" list:"user" create:"optional"` // Column(VARCHAR(32, charset='ascii'), nullable=False, default='qcow2')
+	DiskFormat string `width:"20" charset:"ascii" nullable:"true" list:"user" create:"optional" default:"raw"` // Column(VARCHAR(32, charset='ascii'), nullable=False, default='qcow2')
 	Checksum   string `width:"32" charset:"ascii" nullable:"true" get:"user" list:"user"`
 	FastHash   string `width:"32" charset:"ascii" nullable:"true" get:"user"`
 	Owner      string `width:"255" charset:"ascii" nullable:"true" get:"user"`
@@ -211,9 +213,16 @@ func (self *SImage) CustomizedGetDetailsBody(ctx context.Context, userCred mccli
 
 	appParams := appsrv.AppContextGetParams(ctx)
 
+	fstat, err := os.Stat(filePath)
+	if err != nil {
+		return nil, errors.Wrap(err, "os.Stat")
+	}
+
+	appParams.Response.Header().Set("Content-Length", strconv.FormatInt(fstat.Size(), 10))
+
 	fp, err := os.Open(filePath)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "os.Open")
 	}
 	defer fp.Close()
 
@@ -275,13 +284,17 @@ func (self *SImage) GetExtraDetailsHeaders(ctx context.Context, userCred mcclien
 	headers := make(map[string]string)
 
 	extra, _ := self.SVirtualResourceBase.GetExtraDetails(ctx, userCred, query)
-	if extra != nil {
-		for _, k := range extra.SortedKeys() {
-			log.Infof("%s", k)
-			val, _ := extra.GetString(k)
-			if len(val) > 0 {
-				headers[fmt.Sprintf("%s%s", modules.IMAGE_META, k)] = val
-			}
+	if extra == nil {
+		extra = jsonutils.NewDict()
+	}
+	extraRows := self.GetModelManager().FetchCustomizeColumns(ctx, userCred, query, []db.IModel{self}, nil)
+	if len(extraRows) == 1 {
+		extra.Update(extraRows[0])
+	}
+	for _, k := range extra.SortedKeys() {
+		val, _ := extra.GetString(k)
+		if len(val) > 0 {
+			headers[fmt.Sprintf("%s%s", modules.IMAGE_META, k)] = val
 		}
 	}
 

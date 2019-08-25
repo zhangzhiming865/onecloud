@@ -61,6 +61,9 @@ ifeq ($(UNAME), Linux)
 XARGS_FLAGS = --no-run-if-empty
 endif
 
+cmdTargets:=$(filter-out cmd/host-image,$(wildcard cmd/*))
+rpmTargets:=$(foreach b,$(patsubst cmd/%,%,$(cmdTargets)),$(if $(shell [ -f "$(CURDIR)/build/$(b)/vars" ] && echo 1),rpm/$(b)))
+
 all: build
 
 
@@ -70,9 +73,6 @@ install: prepare_dir
 		$(GO_INSTALL) $$PKG; \
 	done
 
-
-build: gendoc
-	$(MAKE) $(filter-out cmd/host-image, $(wildcard cmd/*))
 
 gendoc:
 	@sh build/gendoc.sh
@@ -89,15 +89,17 @@ vet:
 cmd/%: prepare_dir fmt
 	$(GO_BUILD) -o $(BIN_DIR)/$(shell basename $@) $(REPO_PREFIX)/$@
 
+rpm/%: cmd/%
+	$(BUILD_SCRIPT) $*
 
 pkg/%: prepare_dir fmt
 	$(GO_INSTALL) $(REPO_PREFIX)/$@
 
+build: gendoc
+	$(MAKE) $(cmdTargets)
 
-# a hack
 rpm:
-	$(MAKE) $(patsubst %,cmd/%,$(filter-out $@,$(MAKECMDGOALS)))
-	$(foreach cmd,$(filter-out $@,$(MAKECMDGOALS)),$(BUILD_SCRIPT) $(cmd);)
+	$(MAKE) $(rpmTargets)
 
 rpmclean:
 	rm -fr $(BUILD_DIR)/rpms
@@ -143,12 +145,9 @@ dep:
 	@$(MAKE) mod
 
 mod:
-	go get $(patsubst %,%@master,$(shell GO111MODULE=on go mod edit -print  | sed -n -e 's|.*\(yunion.io/x/[a-z][a-z]*\) v.*|\1|p'))
+	go get $(patsubst %,%@master,$(shell GO111MODULE=on go mod edit -print  | sed -n -e 's|.*\(yunion.io/x/[a-z].*\) v.*|\1|p'))
 	go mod tidy
 	go mod vendor -v
-
-%:
-	@:
 
 
 DOCKER_BUILD_IMAGE_VERSION?=latest

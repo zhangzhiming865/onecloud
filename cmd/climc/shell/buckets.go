@@ -15,6 +15,7 @@
 package shell
 
 import (
+	"fmt"
 	"io"
 	"os"
 
@@ -154,10 +155,12 @@ func init() {
 	type BucketUploadObjectsOptions struct {
 		ID   string `help:"ID or name of bucket" json:"-"`
 		KEY  string `help:"Key of object to upload"`
-		Path string `help:"Path to file to upload"`
+		Path string `help:"Path to file to upload" required:"true"`
 
-		ContentType  string `help:"Content type"`
-		StorageClass string `help:"storage CLass"`
+		ContentLength int64  `help:"Content lenght (bytes)" default:"-1"`
+		ContentType   string `help:"Content type"`
+		StorageClass  string `help:"storage CLass"`
+		Acl           string `help:"object acl." choices:"private|public-read|public-read-write"`
 	}
 	R(&BucketUploadObjectsOptions{}, "bucket-object-upload", "Upload an object into a bucket", func(s *mcclient.ClientSession, args *BucketUploadObjectsOptions) error {
 		var body io.Reader
@@ -168,10 +171,22 @@ func init() {
 			}
 			defer file.Close()
 			body = file
+
+			fileInfo, err := file.Stat()
+			if err != nil {
+				return err
+			}
+
+			args.ContentLength = fileInfo.Size()
 		} else {
 			body = os.Stdin
 		}
-		err := modules.Buckets.Upload(s, args.ID, args.KEY, body, args.ContentType, args.StorageClass)
+
+		if args.ContentLength < 0 {
+			return fmt.Errorf("required content-length")
+		}
+
+		err := modules.Buckets.Upload(s, args.ID, args.KEY, body, args.ContentLength, args.ContentType, args.StorageClass, args.Acl)
 		if err != nil {
 			return err
 		}
@@ -190,6 +205,75 @@ func init() {
 			return err
 		}
 		result, err := modules.Buckets.PerformAction(s, args.ID, "temp-url", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
+		return nil
+	})
+
+	type BucketSetAclOptions struct {
+		ID  string `help:"ID or name of bucket" json:"-"`
+		ACL string `help:"ACL to set" choices:"default|private|public-read|public-read-write"`
+		Key string `help:"Optional object key"`
+	}
+	R(&BucketSetAclOptions{}, "bucket-set-acl", "Set ACL of bucket or object", func(s *mcclient.ClientSession, args *BucketSetAclOptions) error {
+		params, err := options.StructToParams(args)
+		if err != nil {
+			return err
+		}
+		result, err := modules.Buckets.PerformAction(s, args.ID, "acl", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
+		return nil
+	})
+
+	type BucketAclOptions struct {
+		ID  string `help:"ID or name of bucket" json:"-"`
+		Key string `help:"Optional object key"`
+	}
+	R(&BucketAclOptions{}, "bucket-acl", "Get ACL of bucket or object", func(s *mcclient.ClientSession, args *BucketAclOptions) error {
+		params, err := options.StructToParams(args)
+		if err != nil {
+			return err
+		}
+		result, err := modules.Buckets.GetSpecific(s, args.ID, "acl", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
+		return nil
+	})
+
+	type BucketSyncOptions struct {
+		ID        string `help:"ID or name of bucket" json:"-"`
+		StatsOnly bool   `help:"sync statistics only"`
+	}
+	R(&BucketSyncOptions{}, "bucket-sync", "Sync bucket", func(s *mcclient.ClientSession, args *BucketSyncOptions) error {
+		params, err := options.StructToParams(args)
+		if err != nil {
+			return err
+		}
+		result, err := modules.Buckets.PerformAction(s, args.ID, "sync", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
+		return nil
+	})
+
+	type BucketLimitOptions struct {
+		ID          string `help:"ID or name of bucket" json:"-"`
+		SizeBytes   int64  `help:"size limit in bytes"`
+		ObjectCount int64  `help:"object count limit"`
+	}
+	R(&BucketLimitOptions{}, "bucket-limit", "Set limit of bucket", func(s *mcclient.ClientSession, args *BucketLimitOptions) error {
+		limit := jsonutils.Marshal(args)
+		params := jsonutils.NewDict()
+		params.Set("limit", limit)
+		result, err := modules.Buckets.PerformAction(s, args.ID, "limit", params)
 		if err != nil {
 			return err
 		}

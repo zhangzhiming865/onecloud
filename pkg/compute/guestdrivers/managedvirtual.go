@@ -22,6 +22,7 @@ import (
 
 	"github.com/pkg/errors"
 	"yunion.io/x/onecloud/pkg/util/cloudinit"
+	"yunion.io/x/onecloud/pkg/util/seclib2"
 
 	"yunion.io/x/jsonutils"
 	"yunion.io/x/log"
@@ -450,7 +451,17 @@ func (self *SManagedVirtualizedGuestDriver) RemoteDeployGuestForDeploy(ctx conte
 			desc.Password = ""
 		}
 
-		return iVM.DeployVM(ctx, desc.Name, desc.Password, desc.PublicKey, deleteKeypair, desc.Description)
+		e := iVM.DeployVM(ctx, desc.Name, desc.Password, desc.PublicKey, deleteKeypair, desc.Description)
+		if e != nil {
+			return e
+		}
+
+		//解绑秘钥后需要重置密码
+		if deleteKeypair {
+			desc.Password = seclib2.RandomPassword2(12)
+			return iVM.DeployVM(ctx, desc.Name, desc.Password, desc.PublicKey, false, desc.Description)
+		}
+		return nil
 	}()
 	if err != nil {
 		return nil, err
@@ -672,13 +683,6 @@ func (self *SManagedVirtualizedGuestDriver) DoGuestCreateDisksTask(ctx context.C
 	return nil
 }
 
-type SManagedVMChangeConfig struct {
-	InstanceId   string
-	InstanceType string // InstanceType 不为空时，直接采用InstanceType更新主机。
-	Cpu          int
-	Memory       int
-}
-
 func (self *SManagedVirtualizedGuestDriver) RequestChangeVmConfig(ctx context.Context, guest *models.SGuest, task taskman.ITask, instanceType string, vcpuCount, vmemSize int64) error {
 	ihost, err := guest.GetHost().GetIHost()
 	if err != nil {
@@ -691,17 +695,14 @@ func (self *SManagedVirtualizedGuestDriver) RequestChangeVmConfig(ctx context.Co
 	}
 
 	taskman.LocalTaskRun(task, func() (jsonutils.JSONObject, error) {
-		var err error
-		if len(instanceType) > 0 {
-			err = iVM.ChangeConfig2(ctx, instanceType)
+		config := &cloudprovider.SManagedVMChangeConfig{
+			Cpu:          int(vcpuCount),
+			MemoryMB:     int(vmemSize),
+			InstanceType: instanceType,
 		}
-		// no InstanceType
-		// or InstanceType failed but retry with raw cpu/mem config
-		if len(instanceType) == 0 || err != nil {
-			err = iVM.ChangeConfig(ctx, int(vcpuCount), int(vmemSize))
-			if err != nil {
-				return nil, err
-			}
+		err := iVM.ChangeConfig(ctx, config)
+		if err != nil {
+			return nil, err
 		}
 
 		err = cloudprovider.WaitCreated(time.Second*5, time.Minute*5, func() bool {
@@ -733,27 +734,6 @@ func (self *SManagedVirtualizedGuestDriver) RequestChangeVmConfig(ctx context.Co
 		return nil, nil
 	})
 
-	return nil
-}
-
-func (self *SManagedVirtualizedGuestDriver) RequestDiskSnapshot(ctx context.Context, guest *models.SGuest, task taskman.ITask, snapshotId, diskId string) error {
-	iDisk, _ := models.DiskManager.FetchById(diskId)
-	disk := iDisk.(*models.SDisk)
-	providerDisk, err := disk.GetIDisk()
-	if err != nil {
-		return err
-	}
-	iSnapshot, _ := models.SnapshotManager.FetchById(snapshotId)
-	snapshot := iSnapshot.(*models.SSnapshot)
-	taskman.LocalTaskRun(task, func() (jsonutils.JSONObject, error) {
-		cloudSnapshot, err := providerDisk.CreateISnapshot(ctx, snapshot.Name, "")
-		if err != nil {
-			return nil, err
-		}
-		res := jsonutils.NewDict()
-		res.Set("snapshot_id", jsonutils.NewString(cloudSnapshot.GetId()))
-		return res, nil
-	})
 	return nil
 }
 

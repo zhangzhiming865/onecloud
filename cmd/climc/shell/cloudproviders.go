@@ -28,7 +28,11 @@ func init() {
 
 	type CloudproviderListOptions struct {
 		options.BaseListOptions
+
 		Usable bool `help:"Vpc & Network usable"`
+
+		HasObjectStorage bool `help:"filter cloudproviders that has object storage"`
+		NoObjectStorage  bool `help:"filter cloudproviders that has no object storage"`
 	}
 	R(&CloudproviderListOptions{}, "cloud-provider-list", "List cloud providers", func(s *mcclient.ClientSession, args *CloudproviderListOptions) error {
 		var params *jsonutils.JSONDict
@@ -41,6 +45,12 @@ func init() {
 
 			if args.Usable {
 				params.Add(jsonutils.NewBool(true), "usable")
+			}
+
+			if args.HasObjectStorage {
+				params.Add(jsonutils.JSONTrue, "has_object_storage")
+			} else if args.NoObjectStorage {
+				params.Add(jsonutils.JSONFalse, "has_object_storage")
 			}
 		}
 		result, err := modules.Cloudproviders.List(s, params)
@@ -211,6 +221,23 @@ func init() {
 		for k, v := range rc {
 			fmt.Printf("export %s='%s'\n", k, v)
 		}
+		return nil
+	})
+
+	type CloudproviderStorageClassesOptions struct {
+		ID          string `help:"ID or Name of cloud provider" json:"-"`
+		Cloudregion string `help:"cloud region name or Id"`
+	}
+	R(&CloudproviderStorageClassesOptions{}, "cloud-provider-storage-classes", "Get list of supported storage classes of a cloud provider", func(s *mcclient.ClientSession, args *CloudproviderStorageClassesOptions) error {
+		params, err := options.StructToParams(args)
+		if err != nil {
+			return err
+		}
+		result, err := modules.Cloudproviders.GetSpecific(s, args.ID, "storage-classes", params)
+		if err != nil {
+			return err
+		}
+		printObject(result)
 		return nil
 	})
 }

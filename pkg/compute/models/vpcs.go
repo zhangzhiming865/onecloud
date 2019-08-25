@@ -678,11 +678,16 @@ func (manager *SVpcManager) QueryDistinctExtraField(q *sqlchemy.SQuery, field st
 	switch field {
 	case "account":
 		cloudproviders := CloudproviderManager.Query().SubQuery()
-		cloudaccounts := CloudaccountManager.Query().Distinct().SubQuery()
+		cloudaccounts := CloudaccountManager.Query("name", "id").Distinct().SubQuery()
 		q = q.Join(cloudproviders, sqlchemy.Equals(q.Field("manager_id"), cloudproviders.Field("id")))
 		q = q.Join(cloudaccounts, sqlchemy.Equals(cloudproviders.Field("cloudaccount_id"), cloudaccounts.Field("id")))
 		q.GroupBy(cloudaccounts.Field("name"))
 		q.AppendField(cloudaccounts.Field("name", "account"))
+	case "manager":
+		cloudproviders := CloudproviderManager.Query("name", "id").Distinct().SubQuery()
+		q = q.Join(cloudproviders, sqlchemy.Equals(q.Field("manager_id"), cloudproviders.Field("id")))
+		q.GroupBy(cloudproviders.Field("name"))
+		q.AppendField(cloudproviders.Field("name", "manager"))
 	default:
 		return nil, httperrors.NewBadRequestError("unsupport field %s", field)
 	}

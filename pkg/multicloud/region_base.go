@@ -38,11 +38,11 @@ func (self *SRegion) DeleteSnapshotPolicy(string) error {
 	return fmt.Errorf("DeleteSnapshotPolicy not implement")
 }
 
-func (self *SRegion) ApplySnapshotPolicyToDisks(snapshotPolicyId string, diskIds []string) error {
+func (self *SRegion) ApplySnapshotPolicyToDisks(snapshotPolicyId string, diskId string) error {
 	return fmt.Errorf("ApplySnapshotPolicyToDisks not implement")
 }
 
-func (self *SRegion) CancelSnapshotPolicyToDisks(diskIds []string) error {
+func (self *SRegion) CancelSnapshotPolicyToDisks(snapshotPolicyId string, diskId string) error {
 	return fmt.Errorf("ApplySnapshotPolicyToDisks not implement")
 }
 
@@ -50,12 +50,8 @@ func (self *SRegion) GetISkus(zoneId string) ([]cloudprovider.ICloudSku, error) 
 	return nil, cloudprovider.ErrNotSupported
 }
 
-func (self *SRegion) CreateISku(*cloudprovider.SServerSku) (cloudprovider.ICloudSku, error) {
-	return nil, fmt.Errorf("Not Support Create Server Sku")
-}
-
-func (self *SRegion) GetISkuById(skuId string) (cloudprovider.ICloudSku, error) {
-	return nil, fmt.Errorf("Not Support GetISkuById")
+func (self *SRegion) DeleteISkuByName(name string) error {
+	return fmt.Errorf("Not Support DeleteISkuByName")
 }
 
 func (self *SRegion) GetINetworkInterfaces() ([]cloudprovider.ICloudNetworkInterface, error) {
@@ -68,4 +64,8 @@ func (self *SRegion) GetIDBInstances() ([]cloudprovider.ICloudDBInstance, error)
 
 func (self *SRegion) GetIDBInstanceBackups() ([]cloudprovider.ICloudDBInstanceBackup, error) {
 	return nil, fmt.Errorf("Not Implemented GetIDBInstanceBackups")
+}
+
+func (self *SRegion) GetIElasticcaches() ([]cloudprovider.ICloudElasticcache, error) {
+	return nil, fmt.Errorf("Not Implemented GetIElasticcaches")
 }

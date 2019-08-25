@@ -34,6 +34,7 @@ import (
 	"yunion.io/x/sqlchemy"
 
 	api "yunion.io/x/onecloud/pkg/apis/compute"
+	"yunion.io/x/onecloud/pkg/cloudcommon/consts"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/lockman"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
@@ -678,7 +679,11 @@ func (manager *SNetworkManager) newFromCloudNetwork(ctx context.Context, userCre
 	net.GuestGateway = extNet.GetGateway()
 	net.ServerType = extNet.GetServerType()
 	net.IsPublic = extNet.GetIsPublic()
-	net.PublicScope = string(extNet.GetPublicScope())
+	extScope := extNet.GetPublicScope()
+	if extScope == rbacutils.ScopeDomain && !consts.GetNonDefaultDomainProjects() {
+		extScope = rbacutils.ScopeSystem
+	}
+	net.PublicScope = string(extScope)
 
 	net.AllocTimoutSeconds = extNet.GetAllocTimeoutSeconds()
 
@@ -1672,7 +1677,7 @@ func (manager *SNetworkManager) QueryDistinctExtraField(q *sqlchemy.SQuery, fiel
 		vpcs := VpcManager.Query().SubQuery()
 		wires := WireManager.Query().SubQuery()
 		cloudproviders := CloudproviderManager.Query().SubQuery()
-		cloudaccounts := CloudaccountManager.Query().Distinct().SubQuery()
+		cloudaccounts := CloudaccountManager.Query("name", "id").Distinct().SubQuery()
 		q = q.Join(wires, sqlchemy.Equals(q.Field("wire_id"), wires.Field("id")))
 		q = q.Join(vpcs, sqlchemy.Equals(wires.Field("vpc_id"), vpcs.Field("id")))
 		q = q.Join(cloudproviders, sqlchemy.Equals(vpcs.Field("manager_id"), cloudproviders.Field("id")))

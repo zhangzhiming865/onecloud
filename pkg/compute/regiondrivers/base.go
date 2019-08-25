@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"yunion.io/x/jsonutils"
+
 	"yunion.io/x/onecloud/pkg/apis/compute"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
@@ -136,10 +138,42 @@ func (self *SBaseRegionDriver) RequestDeleteSnapshotPolicy(ctx context.Context, 
 	return fmt.Errorf("Not Implement RequestDeleteSnapshotPolicy")
 }
 
-func (self *SBaseRegionDriver) RequestApplySnapshotPolicy(ctx context.Context, userCred mcclient.TokenCredential, sp *models.SSnapshotPolicy, task taskman.ITask, diskIds []string) error {
+func (self *SBaseRegionDriver) RequestApplySnapshotPolicy(ctx context.Context, userCred mcclient.TokenCredential, sp *models.SSnapshotPolicy, task taskman.ITask, diskId string) error {
 	return fmt.Errorf("Not Implement RequestApplySnapshotPolicy")
 }
 
-func (self *SBaseRegionDriver) RequestCancelSnapshotPolicy(ctx context.Context, userCred mcclient.TokenCredential, region cloudprovider.ICloudRegion, task taskman.ITask, diskIds []string) error {
+func (self *SBaseRegionDriver) RequestCancelSnapshotPolicy(ctx context.Context, userCred mcclient.TokenCredential, sp *models.SSnapshotPolicy, task taskman.ITask, diskId string) error {
 	return fmt.Errorf("Not Implement RequestApplySnapshotPolicy")
+}
+
+func (self *SBaseRegionDriver) ValidateSnapshotDelete(ctx context.Context, snapshot *models.SSnapshot) error {
+	return fmt.Errorf("Not Implement ValidateSnapshotDelete")
+}
+
+func (self *SBaseRegionDriver) RequestDeleteSnapshot(ctx context.Context, snapshot *models.SSnapshot, task taskman.ITask) error {
+	return fmt.Errorf("Not Implement RequestDeleteSnapshot")
+}
+
+func (self *SBaseRegionDriver) ValidateSnapshotCreate(ctx context.Context, userCred mcclient.TokenCredential, disk *models.SDisk, data *jsonutils.JSONDict) error {
+	return fmt.Errorf("Not Implement ValidateSnapshotCreate")
+}
+
+func (self *SBaseRegionDriver) RequestCreateSnapshot(ctx context.Context, snapshot *models.SSnapshot, task taskman.ITask) error {
+	return fmt.Errorf("Not Implement RequestCreateSnapshot")
+}
+
+func (self *SBaseRegionDriver) SnapshotIsOutOfChain(disk *models.SDisk) bool {
+	return true
+}
+
+func (self *SBaseRegionDriver) GetDiskResetParams(snapshot *models.SSnapshot) *jsonutils.JSONDict {
+	return nil
+}
+
+func (self *SBaseRegionDriver) OnDiskReset(ctx context.Context, userCred mcclient.TokenCredential, disk *models.SDisk, snapshot *models.SSnapshot, data *jsonutils.JSONObject) error {
+	return fmt.Errorf("Not Implement OnDiskReset")
+}
+
+func (self *SBaseRegionDriver) ValidateCreateSnapshopolicyDiskData(ctx context.Context, userCred mcclient.TokenCredential, diskID string) error {
+	return fmt.Errorf("Not Implement ValidateCreateSnapshotpolicyDiskData")
 }

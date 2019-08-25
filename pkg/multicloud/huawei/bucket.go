@@ -15,33 +15,28 @@
 package huawei
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"time"
 
-	"yunion.io/x/onecloud/pkg/multicloud/objectstore"
-
+	"yunion.io/x/log"
 	"yunion.io/x/pkg/errors"
-
-	"context"
-	"io"
+	"yunion.io/x/s3cli"
 
 	"yunion.io/x/onecloud/pkg/cloudprovider"
+	"yunion.io/x/onecloud/pkg/multicloud"
 	"yunion.io/x/onecloud/pkg/multicloud/huawei/obs"
 )
 
 type SBucket struct {
-	objectstore.SBucket
+	multicloud.SBaseBucket
+
 	region *SRegion
 
 	Name         string
 	Location     string
 	CreationDate time.Time
-
-	StorageClass string
-	Acl          string
-
-	Size         int64
-	ObjectNumber int
 }
 
 func (b *SBucket) GetProjectId() string {
@@ -69,11 +64,72 @@ func (b *SBucket) GetCreateAt() time.Time {
 }
 
 func (b *SBucket) GetStorageClass() string {
-	return b.StorageClass
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		log.Errorf("b.region.getOBSClient error %s", err)
+		return ""
+	}
+	output, err := obscli.GetBucketStoragePolicy(b.Name)
+	if err != nil {
+		log.Errorf("obscli.GetBucketStoragePolicy error %s", err)
+	}
+	return output.StorageClass
 }
 
-func (b *SBucket) GetAcl() string {
-	return b.Acl
+func obsAcl2CannedAcl(acls []obs.Grant) cloudprovider.TBucketACLType {
+	switch {
+	case len(acls) == 1:
+		if acls[0].Grantee.URI == "" && acls[0].Permission == s3cli.PERMISSION_FULL_CONTROL {
+			return cloudprovider.ACLPrivate
+		}
+	case len(acls) == 2:
+		for _, g := range acls {
+			if g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_AUTH_USERS && g.Permission == s3cli.PERMISSION_READ {
+				return cloudprovider.ACLAuthRead
+			}
+			if g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_ALL_USERS && g.Permission == s3cli.PERMISSION_READ {
+				return cloudprovider.ACLPublicRead
+			}
+		}
+	case len(acls) == 3:
+		for _, g := range acls {
+			if g.Grantee.URI == s3cli.GRANTEE_GROUP_URI_ALL_USERS && g.Permission == s3cli.PERMISSION_WRITE {
+				return cloudprovider.ACLPublicReadWrite
+			}
+		}
+	}
+	return cloudprovider.ACLUnknown
+}
+
+func (b *SBucket) GetAcl() cloudprovider.TBucketACLType {
+	acl := cloudprovider.ACLPrivate
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		log.Errorf("b.region.getOBSClient error %s", err)
+		return acl
+	}
+	output, err := obscli.GetBucketAcl(b.Name)
+	if err != nil {
+		log.Errorf("obscli.GetBucketAcl error %s", err)
+		return acl
+	}
+	acl = obsAcl2CannedAcl(output.Grants)
+	return acl
+}
+
+func (b *SBucket) SetAcl(acl cloudprovider.TBucketACLType) error {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return errors.Wrap(err, "b.region.getOBSClient")
+	}
+	input := &obs.SetBucketAclInput{}
+	input.Bucket = b.Name
+	input.ACL = obs.AclType(string(acl))
+	_, err = obscli.SetBucketAcl(input)
+	if err != nil {
+		return errors.Wrap(err, "obscli.SetBucketAcl")
+	}
+	return nil
 }
 
 func (b *SBucket) GetAccessUrls() []cloudprovider.SBucketAccessUrl {
@@ -81,6 +137,7 @@ func (b *SBucket) GetAccessUrls() []cloudprovider.SBucketAccessUrl {
 		{
 			Url:         fmt.Sprintf("https://%s.%s", b.Name, b.region.getOBSEndpoint()),
 			Description: "bucket url",
+			Primary:     true,
 		},
 		{
 			Url:         fmt.Sprintf("https://%s/%s", b.region.getOBSEndpoint(), b.Name),
@@ -89,12 +146,25 @@ func (b *SBucket) GetAccessUrls() []cloudprovider.SBucketAccessUrl {
 	}
 }
 
-func (b *SBucket) GetSizeByte() int64 {
-	return b.Size
-}
-
-func (b *SBucket) GetObjectNumber() int {
-	return b.ObjectNumber
+func (b *SBucket) GetStats() cloudprovider.SBucketStats {
+	stats := cloudprovider.SBucketStats{}
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		log.Errorf("b.region.getOBSClient error %s", err)
+		stats.SizeBytes = -1
+		stats.ObjectCount = -1
+		return stats
+	}
+	output, err := obscli.GetBucketStorageInfo(b.Name)
+	if err != nil {
+		log.Errorf("obscli.GetBucketStorageInfo error %s", err)
+		stats.SizeBytes = -1
+		stats.ObjectCount = -1
+		return stats
+	}
+	stats.SizeBytes = output.Size
+	stats.ObjectCount = output.ObjectNumber
+	return stats
 }
 
 func (b *SBucket) GetIObjects(prefix string, isRecursive bool) ([]cloudprovider.ICloudObject, error) {
@@ -157,7 +227,7 @@ func (b *SBucket) ListObjects(prefix string, marker string, delimiter string, ma
 	return result, nil
 }
 
-func (b *SBucket) PutObject(ctx context.Context, key string, reader io.Reader, contType string, storageClassStr string) error {
+func (b *SBucket) PutObject(ctx context.Context, key string, reader io.Reader, sizeBytes int64, contType string, cannedAcl cloudprovider.TBucketACLType, storageClassStr string) error {
 	obscli, err := b.region.getOBSClient()
 	if err != nil {
 		return errors.Wrap(err, "GetOBSClient")
@@ -166,11 +236,18 @@ func (b *SBucket) PutObject(ctx context.Context, key string, reader io.Reader, c
 	input.Bucket = b.Name
 	input.Key = key
 	input.Body = reader
+
+	if sizeBytes > 0 {
+		input.ContentLength = sizeBytes
+	}
 	if len(storageClassStr) > 0 {
 		input.StorageClass, err = str2StorageClass(storageClassStr)
 		if err != nil {
 			return err
 		}
+	}
+	if len(cannedAcl) > 0 {
+		input.ACL = obs.AclType(string(cannedAcl))
 	}
 	if len(contType) > 0 {
 		input.ContentType = contType
@@ -179,6 +256,100 @@ func (b *SBucket) PutObject(ctx context.Context, key string, reader io.Reader, c
 	if err != nil {
 		return errors.Wrap(err, "PutObject")
 	}
+	return nil
+}
+
+func (b *SBucket) NewMultipartUpload(ctx context.Context, key string, contType string, cannedAcl cloudprovider.TBucketACLType, storageClassStr string) (string, error) {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return "", errors.Wrap(err, "GetOBSClient")
+	}
+
+	input := &obs.InitiateMultipartUploadInput{}
+	input.Bucket = b.Name
+	input.Key = key
+	if len(contType) > 0 {
+		input.ContentType = contType
+	}
+	if len(cannedAcl) > 0 {
+		input.ACL = obs.AclType(string(cannedAcl))
+	}
+	if len(storageClassStr) > 0 {
+		input.StorageClass, err = str2StorageClass(storageClassStr)
+		if err != nil {
+			return "", errors.Wrap(err, "str2StorageClass")
+		}
+	}
+	output, err := obscli.InitiateMultipartUpload(input)
+	if err != nil {
+		return "", errors.Wrap(err, "InitiateMultipartUpload")
+	}
+
+	return output.UploadId, nil
+}
+
+func (b *SBucket) UploadPart(ctx context.Context, key string, uploadId string, partIndex int, part io.Reader, partSize int64) (string, error) {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return "", errors.Wrap(err, "GetOBSClient")
+	}
+
+	input := &obs.UploadPartInput{}
+	input.Bucket = b.Name
+	input.Key = key
+	input.UploadId = uploadId
+	input.PartNumber = partIndex
+	input.PartSize = partSize
+	input.Body = part
+	output, err := obscli.UploadPart(input)
+	if err != nil {
+		return "", errors.Wrap(err, "UploadPart")
+	}
+
+	return output.ETag, nil
+}
+
+func (b *SBucket) CompleteMultipartUpload(ctx context.Context, key string, uploadId string, partEtags []string) error {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return errors.Wrap(err, "GetOBSClient")
+	}
+	input := &obs.CompleteMultipartUploadInput{}
+	input.Bucket = b.Name
+	input.Key = key
+	input.UploadId = uploadId
+	parts := make([]obs.Part, len(partEtags))
+	for i := range partEtags {
+		parts[i] = obs.Part{
+			PartNumber: i + 1,
+			ETag:       partEtags[i],
+		}
+	}
+	input.Parts = parts
+	_, err = obscli.CompleteMultipartUpload(input)
+	if err != nil {
+		return errors.Wrap(err, "CompleteMultipartUpload")
+	}
+
+	return nil
+}
+
+func (b *SBucket) AbortMultipartUpload(ctx context.Context, key string, uploadId string) error {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return errors.Wrap(err, "GetOBSClient")
+	}
+
+	input := &obs.AbortMultipartUploadInput{}
+	input.Bucket = b.Name
+	input.Key = key
+	input.UploadId = uploadId
+
+	_, err = obscli.AbortMultipartUpload(input)
+	if err != nil {
+		return errors.Wrap(err, "AbortMultipartUpload")
+	}
+
 	return nil
 }
 
@@ -218,4 +389,34 @@ func (b *SBucket) GetTempUrl(method string, key string, expire time.Duration) (s
 	}
 	output, err := obscli.CreateSignedUrl(&input)
 	return output.SignedUrl, nil
+}
+
+func (b *SBucket) GetLimit() cloudprovider.SBucketStats {
+	stats := cloudprovider.SBucketStats{}
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		log.Errorf("getOBSClient error %s", err)
+		return stats
+	}
+	output, err := obscli.GetBucketQuota(b.Name)
+	if err != nil {
+		return stats
+	}
+	stats.SizeBytes = output.Quota
+	return stats
+}
+
+func (b *SBucket) SetLimit(limit cloudprovider.SBucketStats) error {
+	obscli, err := b.region.getOBSClient()
+	if err != nil {
+		return errors.Wrap(err, "getOBSClient")
+	}
+	input := &obs.SetBucketQuotaInput{}
+	input.Bucket = b.Name
+	input.Quota = limit.SizeBytes
+	_, err = obscli.SetBucketQuota(input)
+	if err != nil {
+		return errors.Wrap(err, "SetBucketQuota")
+	}
+	return nil
 }

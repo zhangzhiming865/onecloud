@@ -31,6 +31,7 @@ import (
 	"yunion.io/x/onecloud/pkg/cloudcommon/db"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/lockman"
 	"yunion.io/x/onecloud/pkg/cloudcommon/db/taskman"
+	"yunion.io/x/onecloud/pkg/cloudcommon/validators"
 	"yunion.io/x/onecloud/pkg/cloudprovider"
 	"yunion.io/x/onecloud/pkg/httperrors"
 	"yunion.io/x/onecloud/pkg/mcclient"
@@ -61,7 +62,8 @@ type SWire struct {
 	db.SStandaloneResourceBase
 	db.SExternalizedResourceBase
 
-	Bandwidth    int    `list:"admin" update:"admin" nullable:"false" create:"admin_required"`            // = Column(Integer, nullable=False) # bandwidth of network in Mbps
+	Bandwidth    int    `list:"admin" update:"admin" nullable:"false" create:"admin_required"` // = Column(Integer, nullable=False) # bandwidth of network in Mbps
+	Mtu          int    `list:"admin" update:"admin" nullable:"false" create:"admin_optional" default:"1500"`
 	ScheduleRank int    `list:"admin" update:"admin"`                                                     // = Column(Integer, default=0, nullable=True)
 	ZoneId       string `width:"36" charset:"ascii" nullable:"true" list:"admin" create:"admin_required"` // = Column(VARCHAR(36, charset='ascii'), nullable=False)
 	VpcId        string `wdith:"36" charset:"ascii" nullable:"false" list:"admin" create:"admin_required"`
@@ -95,9 +97,14 @@ func (self *SWire) AllowDeleteItem(ctx context.Context, userCred mcclient.TokenC
 }
 
 func (manager *SWireManager) ValidateCreateData(ctx context.Context, userCred mcclient.TokenCredential, ownerId mcclient.IIdentityProvider, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
-	bandwidth, err := data.Int("bandwidth")
-	if err != nil || bandwidth == 0 {
-		return nil, httperrors.NewInputParameterError("invalid bandwidth")
+	keysV := []validators.IValidator{
+		validators.NewNonNegativeValidator("bandwidth"),
+		validators.NewRangeValidator("mtu", 1, 1000000).Optional(true),
+	}
+	for _, v := range keysV {
+		if err := v.Validate(data); err != nil {
+			return nil, err
+		}
 	}
 
 	vpcStr := jsonutils.GetAnyString(data, []string{"vpc", "vpc_id"})
@@ -121,10 +128,17 @@ func (manager *SWireManager) ValidateCreateData(ctx context.Context, userCred mc
 }
 
 func (wire *SWire) ValidateUpdateData(ctx context.Context, userCred mcclient.TokenCredential, query jsonutils.JSONObject, data *jsonutils.JSONDict) (*jsonutils.JSONDict, error) {
-	bandwidth, err := data.Int("bandwidth")
-	if err == nil && bandwidth <= 0 {
-		return nil, httperrors.NewInputParameterError("invalid bandwidth")
+	keysV := []validators.IValidator{
+		validators.NewNonNegativeValidator("bandwidth"),
+		validators.NewRangeValidator("mtu", 1, 1000000).Optional(true),
 	}
+	for _, v := range keysV {
+		v.Optional(true)
+		if err := v.Validate(data); err != nil {
+			return nil, err
+		}
+	}
+
 	return wire.SStandaloneResourceBase.ValidateUpdateData(ctx, userCred, query, data)
 }
 

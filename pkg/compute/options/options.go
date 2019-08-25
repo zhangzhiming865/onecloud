@@ -48,6 +48,7 @@ type ComputeOptions struct {
 	MetricsRetentionDays    int32  `default:"30" help:"Retention days for monitoring metrics in influxdb"`
 
 	DefaultBandwidth int `default:"1000" help:"Default bandwidth"`
+	DefaultMtu       int `default:"1500" help:"Default network mtu"`
 
 	DefaultCpuQuota            int `help:"Common CPU quota per tenant, default 200" default:"200"`
 	DefaultMemoryQuota         int `default:"204800" help:"Common memory quota per tenant in MB, default 200G"`
@@ -62,6 +63,9 @@ type ComputeOptions struct {
 	DefaultSecgroupQuota       int `default:"50" help:"Common security group quota per tenant, default 50"`
 	DefaultIsolatedDeviceQuota int `default:"200" help:"Common isolated device quota per tenant, default 200"`
 	DefaultSnapshotQuota       int `default:"10" help:"Common snapshot quota per tenant, default 10"`
+	DefaultBucketQuota         int `default:"100" help:"Common bucket quota per tenant, default 100"`
+	DefaultObjectGBQuota       int `default:"100" help:"Common object size quota per tenant in GB, default 100GB"`
+	DefaultObjectCntQuota      int `default:"500" help:"Common object count quota per tenant, default 500"`
 
 	SystemAdminQuotaCheck bool `help:"Enable quota check for system admin, default False" default:"false"`
 
